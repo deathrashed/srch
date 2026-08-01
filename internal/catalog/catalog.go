@@ -17,9 +17,10 @@ import (
 var builtins embed.FS
 
 type dataFile struct {
-	Engines    []domain.Engine    `yaml:"engines"`
-	Presets    []domain.Preset    `yaml:"presets"`
-	SearchSets []domain.SearchSet `yaml:"search_sets"`
+	Engines       []domain.Engine       `yaml:"engines"`
+	Presets       []domain.Preset       `yaml:"presets"`
+	SearchSets    []domain.SearchSet    `yaml:"search_sets"`
+	LegacyTargets []domain.LegacyTarget `yaml:"legacy_targets"`
 }
 
 type Catalog struct {
@@ -29,6 +30,7 @@ type Catalog struct {
 	engineAliases map[string]string
 	presetAliases map[string]string
 	bangs         map[string]string
+	legacyTargets map[string]domain.SearchTarget
 }
 
 func Load(userPath string) (*Catalog, error) {
@@ -61,6 +63,7 @@ func Load(userPath string) (*Catalog, error) {
 		engineAliases: make(map[string]string),
 		presetAliases: make(map[string]string),
 		bangs:         make(map[string]string),
+		legacyTargets: make(map[string]domain.SearchTarget),
 	}
 	for _, engine := range base.Engines {
 		c.engines[engine.ID] = engine
@@ -84,6 +87,9 @@ func Load(userPath string) (*Catalog, error) {
 	for _, set := range base.SearchSets {
 		c.searchSets[set.ID] = set
 	}
+	for _, legacy := range base.LegacyTargets {
+		c.legacyTargets[normalize(legacy.ID)] = legacy.Target
+	}
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -103,6 +109,21 @@ func (c *Catalog) Validate() error {
 		if _, ok := c.engines[preset.EngineID]; !ok {
 			return fmt.Errorf("preset %q references missing engine %q", id, preset.EngineID)
 		}
+		engine := c.engines[preset.EngineID]
+		if preset.TargetID != "" && !hasTarget(engine, preset.TargetID) {
+			return fmt.Errorf("preset %q references missing target %q", id, preset.TargetID)
+		}
+		for groupID, value := range preset.Modifiers {
+			binding, ok := engine.Bindings[groupID]
+			if !ok {
+				return fmt.Errorf("preset %q references unsupported option group %q", id, groupID)
+			}
+			if len(binding.Values) > 0 {
+				if _, ok := binding.Values[value]; !ok {
+					return fmt.Errorf("preset %q uses unsupported %s value %q", id, groupID, value)
+				}
+			}
+		}
 	}
 	for id, set := range c.searchSets {
 		for _, engineID := range set.EngineIDs {
@@ -110,11 +131,40 @@ func (c *Catalog) Validate() error {
 				return fmt.Errorf("search set %q references missing engine %q", id, engineID)
 			}
 		}
+		for _, target := range set.Targets {
+			if _, err := c.ResolveTarget(target); err != nil {
+				return fmt.Errorf("search set %q: %w", id, err)
+			}
+		}
+	}
+	for id, target := range c.legacyTargets {
+		if _, err := c.resolveTarget(target, false); err != nil {
+			return fmt.Errorf("legacy target %q: %w", id, err)
+		}
 	}
 	return nil
 }
 
 func (c *Catalog) Engine(idOrAlias string) (domain.Engine, bool) {
+	if replacement, ok := c.legacyTargets[normalize(idOrAlias)]; ok {
+		engine, ok := c.Engine(replacement.EngineID)
+		if !ok {
+			return domain.Engine{}, false
+		}
+		for _, target := range engine.Targets {
+			if target.ID != replacement.TargetID {
+				continue
+			}
+			if engine.URL.Params == nil {
+				engine.URL.Params = make(map[string]string)
+			}
+			for key, value := range target.Params {
+				engine.URL.Params[key] = value
+			}
+			break
+		}
+		return engine, true
+	}
 	id := idOrAlias
 	if resolved, ok := c.engineAliases[normalize(idOrAlias)]; ok {
 		id = resolved
@@ -169,12 +219,88 @@ func (c *Catalog) Engines(category string, includeUnavailable bool) []domain.Eng
 func (c *Catalog) Presets(category string) []domain.Preset {
 	items := make([]domain.Preset, 0, len(c.presets))
 	for _, preset := range c.presets {
-		if category == "" || preset.Category == category {
+		engine := c.engines[preset.EngineID]
+		if category == "" || engine.Category == category {
 			items = append(items, preset)
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	return items
+}
+
+func (c *Catalog) PresetsForEngine(engineID string) []domain.Preset {
+	engine, ok := c.Engine(engineID)
+	if !ok {
+		return nil
+	}
+	items := make([]domain.Preset, 0)
+	for _, preset := range c.presets {
+		if preset.EngineID == engine.ID {
+			items = append(items, preset)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	return items
+}
+
+func (c *Catalog) ResolveTarget(target domain.SearchTarget) (domain.ResolvedTarget, error) {
+	return c.resolveTarget(target, true)
+}
+
+func (c *Catalog) resolveTarget(target domain.SearchTarget, allowLegacy bool) (domain.ResolvedTarget, error) {
+	if allowLegacy {
+		if replacement, ok := c.legacyTargets[normalize(target.EngineID)]; ok {
+			if target.TargetID != "" {
+				replacement.TargetID = target.TargetID
+			}
+			if target.PresetID != "" {
+				replacement.PresetID = target.PresetID
+			}
+			target = replacement
+		}
+	}
+	engine, ok := c.Engine(target.EngineID)
+	if !ok {
+		return domain.ResolvedTarget{}, fmt.Errorf("unknown engine %q", target.EngineID)
+	}
+	var preset *domain.Preset
+	if target.PresetID != "" {
+		value, ok := c.Preset(target.PresetID)
+		if !ok {
+			return domain.ResolvedTarget{}, fmt.Errorf("unknown preset %q", target.PresetID)
+		}
+		if value.EngineID != engine.ID {
+			return domain.ResolvedTarget{}, fmt.Errorf("preset %q belongs to engine %q, not %q", value.ID, value.EngineID, engine.ID)
+		}
+		preset = &value
+		if target.TargetID == "" {
+			target.TargetID = value.TargetID
+		}
+	}
+	var selected domain.EngineTarget
+	if target.TargetID != "" {
+		for _, candidate := range engine.Targets {
+			if candidate.ID == target.TargetID {
+				selected = candidate
+				break
+			}
+		}
+		if selected.ID == "" {
+			return domain.ResolvedTarget{}, fmt.Errorf("engine %q has no target %q", engine.ID, target.TargetID)
+		}
+	} else if len(engine.Targets) > 0 {
+		selected = engine.Targets[0]
+	}
+	return domain.ResolvedTarget{Engine: engine, Target: selected, Preset: preset}, nil
+}
+
+func hasTarget(engine domain.Engine, targetID string) bool {
+	for _, target := range engine.Targets {
+		if target.ID == targetID {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Catalog) SearchSets(category string) []domain.SearchSet {

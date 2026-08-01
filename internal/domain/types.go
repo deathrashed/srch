@@ -59,36 +59,114 @@ type URLSpec struct {
 	Params     map[string]string `yaml:"params,omitempty" json:"params,omitempty"`
 }
 
-type Engine struct {
+type CapabilityConfidence string
+
+const (
+	ConfidenceDocumented      CapabilityConfidence = "documented"
+	ConfidenceObserved        CapabilityConfidence = "observed"
+	ConfidenceDestinationOnly CapabilityConfidence = "destination_only"
+)
+
+type OptionKind string
+
+const (
+	OptionSelect  OptionKind = "select"
+	OptionMulti   OptionKind = "multi"
+	OptionBoolean OptionKind = "boolean"
+	OptionRange   OptionKind = "range"
+	OptionField   OptionKind = "field"
+)
+
+type Option struct {
+	ID    string `yaml:"id" json:"id"`
+	Name  string `yaml:"name" json:"name"`
+	Value string `yaml:"value,omitempty" json:"value,omitempty"`
+}
+
+type OptionGroup struct {
+	ID         string               `yaml:"id" json:"id"`
+	Name       string               `yaml:"name" json:"name"`
+	Kind       OptionKind           `yaml:"kind" json:"kind"`
+	Options    []Option             `yaml:"options,omitempty" json:"options,omitempty"`
+	Confidence CapabilityConfidence `yaml:"confidence,omitempty" json:"confidence,omitempty"`
+}
+
+type Field struct {
+	ID          string `yaml:"id" json:"id"`
+	Name        string `yaml:"name" json:"name"`
+	Placeholder string `yaml:"placeholder,omitempty" json:"placeholder,omitempty"`
+	Required    bool   `yaml:"required,omitempty" json:"required,omitempty"`
+}
+
+type EngineTarget struct {
 	ID           string            `yaml:"id" json:"id"`
 	Name         string            `yaml:"name" json:"name"`
-	Aliases      []string          `yaml:"aliases,omitempty" json:"aliases,omitempty"`
-	Bangs        []string          `yaml:"bangs,omitempty" json:"bangs,omitempty"`
-	Category     string            `yaml:"category" json:"category"`
-	Tags         []string          `yaml:"tags,omitempty" json:"tags,omitempty"`
-	InputKind    string            `yaml:"input_kind,omitempty" json:"input_kind,omitempty"`
-	URL          URLSpec           `yaml:"url" json:"url"`
-	Capabilities []string          `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
-	Verification Verification      `yaml:"verification" json:"verification"`
-	Disabled     bool              `yaml:"disabled,omitempty" json:"disabled,omitempty"`
-	Meta         map[string]string `yaml:"meta,omitempty" json:"meta,omitempty"`
+	QueryParam   string            `yaml:"query_param,omitempty" json:"query_param,omitempty"`
+	Params       map[string]string `yaml:"params,omitempty" json:"params,omitempty"`
+	Fields       []Field           `yaml:"fields,omitempty" json:"fields,omitempty"`
+	OptionGroups []OptionGroup     `yaml:"option_groups,omitempty" json:"option_groups,omitempty"`
+}
+
+type ModifierBinding struct {
+	Param    string            `yaml:"param,omitempty" json:"param,omitempty"`
+	Template string            `yaml:"template,omitempty" json:"template,omitempty"`
+	Join     string            `yaml:"join,omitempty" json:"join,omitempty"`
+	Values   map[string]string `yaml:"values,omitempty" json:"values,omitempty"`
+}
+
+type Engine struct {
+	ID           string                     `yaml:"id" json:"id"`
+	Name         string                     `yaml:"name" json:"name"`
+	Aliases      []string                   `yaml:"aliases,omitempty" json:"aliases,omitempty"`
+	Bangs        []string                   `yaml:"bangs,omitempty" json:"bangs,omitempty"`
+	Category     string                     `yaml:"category" json:"category"`
+	Tags         []string                   `yaml:"tags,omitempty" json:"tags,omitempty"`
+	InputKind    string                     `yaml:"input_kind,omitempty" json:"input_kind,omitempty"`
+	URL          URLSpec                    `yaml:"url" json:"url"`
+	Capabilities []string                   `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+	Targets      []EngineTarget             `yaml:"targets,omitempty" json:"targets,omitempty"`
+	Bindings     map[string]ModifierBinding `yaml:"bindings,omitempty" json:"bindings,omitempty"`
+	Confidence   CapabilityConfidence       `yaml:"confidence,omitempty" json:"confidence,omitempty"`
+	Verification Verification               `yaml:"verification" json:"verification"`
+	Disabled     bool                       `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	Meta         map[string]string          `yaml:"meta,omitempty" json:"meta,omitempty"`
 }
 
 type Preset struct {
 	ID          string            `yaml:"id" json:"id"`
 	Name        string            `yaml:"name" json:"name"`
-	Category    string            `yaml:"category" json:"category"`
+	Category    string            `yaml:"category,omitempty" json:"category,omitempty"` // legacy input; category is derived from EngineID
 	EngineID    string            `yaml:"engine" json:"engine"`
+	TargetID    string            `yaml:"target,omitempty" json:"target,omitempty"`
 	Aliases     []string          `yaml:"aliases,omitempty" json:"aliases,omitempty"`
 	QuerySuffix string            `yaml:"query_suffix,omitempty" json:"query_suffix,omitempty"`
 	Params      map[string]string `yaml:"params,omitempty" json:"params,omitempty"`
+	Modifiers   map[string]string `yaml:"modifiers,omitempty" json:"modifiers,omitempty"`
+}
+
+type SearchTarget struct {
+	EngineID string `yaml:"engine" json:"engine"`
+	TargetID string `yaml:"target,omitempty" json:"target,omitempty"`
+	PresetID string `yaml:"preset,omitempty" json:"preset,omitempty"`
+}
+
+type LegacyTarget struct {
+	ID     string       `yaml:"id" json:"id"`
+	Target SearchTarget `yaml:"target" json:"target"`
+}
+
+type ResolvedTarget struct {
+	Engine Engine
+	Target EngineTarget
+	Preset *Preset
 }
 
 type SearchSet struct {
-	ID        string   `yaml:"id" json:"id"`
-	Name      string   `yaml:"name" json:"name"`
-	Category  string   `yaml:"category" json:"category"`
-	EngineIDs []string `yaml:"engines" json:"engines"`
+	ID        string         `yaml:"id" json:"id"`
+	Name      string         `yaml:"name" json:"name"`
+	Category  string         `yaml:"category" json:"category"`
+	EngineIDs []string       `yaml:"engines" json:"engines"`
+	Targets   []SearchTarget `yaml:"targets,omitempty" json:"targets,omitempty"`
 }
 
 type Modifiers struct {
@@ -99,15 +177,16 @@ type Modifiers struct {
 }
 
 type SearchRequest struct {
-	Query       string     `json:"query"`
-	CategoryID  string     `json:"category,omitempty"`
-	EngineIDs   []string   `json:"engines,omitempty"`
-	PresetID    string     `json:"preset,omitempty"`
-	SearchSetID string     `json:"search_set,omitempty"`
-	Modifiers   Modifiers  `json:"modifiers,omitempty"`
-	Action      Action     `json:"action"`
-	Output      OutputMode `json:"output"`
-	Private     bool       `json:"private,omitempty"`
+	Query       string         `json:"query"`
+	CategoryID  string         `json:"category,omitempty"`
+	EngineIDs   []string       `json:"engines,omitempty"`
+	Targets     []SearchTarget `json:"targets,omitempty"`
+	PresetID    string         `json:"preset,omitempty"`
+	SearchSetID string         `json:"search_set,omitempty"`
+	Modifiers   Modifiers      `json:"modifiers,omitempty"`
+	Action      Action         `json:"action"`
+	Output      OutputMode     `json:"output"`
+	Private     bool           `json:"private,omitempty"`
 }
 
 type Result struct {

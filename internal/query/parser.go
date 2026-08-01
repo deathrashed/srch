@@ -25,6 +25,7 @@ func Parse(args []string, cat *catalog.Catalog, cfg config.Config) (domain.Searc
 		},
 	}
 	literal := false
+	explicitEngine := false
 	queryParts := make([]string, 0, len(args))
 	for index, arg := range args {
 		if literal {
@@ -43,6 +44,7 @@ func Parse(args []string, cat *catalog.Catalog, cfg config.Config) (domain.Searc
 			}
 			request.EngineIDs = []string{engine.ID}
 			request.CategoryID = engine.Category
+			explicitEngine = true
 			continue
 		case strings.HasPrefix(arg, "!"):
 			engine, ok := cat.EngineByBang(arg)
@@ -51,6 +53,7 @@ func Parse(args []string, cat *catalog.Catalog, cfg config.Config) (domain.Searc
 			}
 			request.EngineIDs = []string{engine.ID}
 			request.CategoryID = engine.Category
+			explicitEngine = true
 			continue
 		case strings.HasPrefix(arg, "#"):
 			request.CategoryID = strings.TrimPrefix(strings.ToLower(arg), "#")
@@ -61,8 +64,11 @@ func Parse(args []string, cat *catalog.Catalog, cfg config.Config) (domain.Searc
 				return request, fmt.Errorf("unknown preset %q", arg)
 			}
 			request.PresetID = preset.ID
-			request.EngineIDs = []string{preset.EngineID}
-			request.CategoryID = preset.Category
+			if !explicitEngine {
+				request.EngineIDs = []string{preset.EngineID}
+			}
+			engine, _ := cat.Engine(preset.EngineID)
+			request.CategoryID = engine.Category
 			continue
 		}
 		if key, value, ok := strings.Cut(arg, ":"); ok {
@@ -79,6 +85,7 @@ func Parse(args []string, cat *catalog.Catalog, cfg config.Config) (domain.Searc
 			if engine, ok := cat.Engine(arg); ok {
 				request.EngineIDs = []string{engine.ID}
 				request.CategoryID = engine.Category
+				explicitEngine = true
 				continue
 			}
 		}
@@ -98,6 +105,10 @@ func Parse(args []string, cat *catalog.Catalog, cfg config.Config) (domain.Searc
 		if request.PresetID == "" {
 			request.PresetID = preference.DefaultPreset
 		}
+	}
+	request.Targets = make([]domain.SearchTarget, 0, len(request.EngineIDs))
+	for _, engineID := range request.EngineIDs {
+		request.Targets = append(request.Targets, domain.SearchTarget{EngineID: engineID, PresetID: request.PresetID})
 	}
 	return request, nil
 }

@@ -59,39 +59,46 @@ func (e *Environment) Parse(args []string) (domain.SearchRequest, error) {
 }
 
 func (e *Environment) URLs(request domain.SearchRequest) ([]query.BuiltURL, error) {
-	engineIDs := request.EngineIDs
+	targets := request.Targets
+	if len(targets) == 0 {
+		for _, engineID := range request.EngineIDs {
+			targets = append(targets, domain.SearchTarget{EngineID: engineID, PresetID: request.PresetID})
+		}
+	}
 	if request.SearchSetID != "" {
 		set, ok := e.Catalog.SearchSet(request.SearchSetID)
 		if !ok {
 			return nil, fmt.Errorf("unknown search set %q", request.SearchSetID)
 		}
-		engineIDs = set.EngineIDs
+		targets = append([]domain.SearchTarget(nil), set.Targets...)
+		if len(targets) == 0 {
+			for _, engineID := range set.EngineIDs {
+				targets = append(targets, domain.SearchTarget{EngineID: engineID})
+			}
+		}
 	}
-	var preset *domain.Preset
-	if request.PresetID != "" {
-		value, ok := e.Catalog.Preset(request.PresetID)
+	if len(targets) == 0 && request.PresetID != "" {
+		preset, ok := e.Catalog.Preset(request.PresetID)
 		if !ok {
 			return nil, fmt.Errorf("unknown preset %q", request.PresetID)
 		}
-		preset = &value
-		if len(engineIDs) == 0 {
-			engineIDs = []string{value.EngineID}
-		}
+		targets = []domain.SearchTarget{{EngineID: preset.EngineID, PresetID: preset.ID}}
 	}
-	result := make([]query.BuiltURL, 0, len(engineIDs))
-	for _, id := range engineIDs {
-		engine, ok := e.Catalog.Engine(id)
-		if !ok {
-			return nil, fmt.Errorf("engine %q is missing or unavailable", id)
+	result := make([]query.BuiltURL, 0, len(targets))
+	for _, target := range targets {
+		resolved, err := e.Catalog.ResolveTarget(target)
+		if err != nil {
+			return nil, err
 		}
-		enginePreset := preset
-		if preset != nil && preset.EngineID != engine.ID {
-			enginePreset = nil
-		}
+		engine := resolved.Engine
 		if err := validateCapabilities(engine, request.Modifiers); err != nil {
 			return nil, err
 		}
-		rawURL, err := query.Build(engine, enginePreset, request)
+		var selected *domain.EngineTarget
+		if resolved.Target.ID != "" {
+			selected = &resolved.Target
+		}
+		rawURL, err := query.BuildTarget(engine, selected, resolved.Preset, request)
 		if err != nil {
 			return nil, err
 		}

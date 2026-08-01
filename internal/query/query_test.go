@@ -112,3 +112,31 @@ func TestImageModifiersCompose(t *testing.T) {
 		}
 	}
 }
+
+func TestSelectorsAreOrderIndependent(t *testing.T) {
+	cat := loadCatalog(t)
+	cfg := config.Defaults()
+	left, err := query.Parse([]string{"@metal-archives", "+metal-album", "Black Sabbath"}, cat, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := query.Parse([]string{"+metal-album", "@metal-archives", "Black Sabbath"}, cat, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left.EngineIDs[0] != right.EngineIDs[0] || left.PresetID != right.PresetID || left.CategoryID != right.CategoryID {
+		t.Fatalf("selector order changed resolution: %#v != %#v", left, right)
+	}
+}
+
+func TestBingDoesNotReceiveGoogleImageBindings(t *testing.T) {
+	cat := loadCatalog(t)
+	engine, _ := cat.Engine("bing-images")
+	got, err := query.Build(engine, nil, domain.SearchRequest{Query: "logo", Modifiers: domain.Modifiers{Values: map[string]string{"size": "large"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "tbs=") {
+		t.Fatalf("provider-specific parameter leaked into Bing: %s", got)
+	}
+}

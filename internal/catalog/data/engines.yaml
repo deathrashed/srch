@@ -16,7 +16,7 @@ engines:
   - {id: mojeek, name: Mojeek, category: web, url: {base: "https://www.mojeek.com/search", placement: query, query_param: q}, verification: {status: reachable}}
   - {id: marginalia, name: Marginalia Search, category: web, url: {base: "https://search.marginalia.nu/search", placement: query, query_param: query}, verification: {status: reachable}}
 
-  - {id: google-images, name: Google Images, aliases: [gi], category: images, url: {base: "https://www.google.com/search", placement: query, query_param: q, params: {tbm: isch}}, capabilities: [size, color, type, since, exact, exclude, site], verification: {status: verified}}
+  - {id: google-images, name: Google Images, aliases: [gi], category: images, confidence: observed, url: {base: "https://www.google.com/search", placement: query, query_param: q, params: {tbm: isch}}, targets: [{id: image, name: Images}], capabilities: [size, color, type, format, since, exact, exclude, site], bindings: {size: {param: tbs, values: {large: "isz:l", l: "isz:l", medium: "isz:m", m: "isz:m", icon: "isz:i", small: "isz:i", s: "isz:i"}}, color: {param: tbs, values: {transparent: "ic:trans"}}, format: {param: tbs, values: {svg: "ift:svg"}}, since: {param: tbs, template: "qdr:%s", values: {year: "qdr:y"}}}, verification: {status: best_effort, note: "Image filter URL parameters are observed browser behavior"}}
   - {id: bing-images, name: Bing Images, category: images, url: {base: "https://www.bing.com/images/search", placement: query, query_param: q}, capabilities: [size, color], verification: {status: verified}}
   - {id: yahoo-images, name: Yahoo Images, category: images, url: {base: "https://images.search.yahoo.com/search/images", placement: query, query_param: p}, verification: {status: reachable}}
   - {id: openverse, name: Openverse, category: images, url: {base: "https://openverse.org/search/image", placement: query, query_param: q}, verification: {status: verified}}
@@ -46,8 +46,7 @@ engines:
   - {id: bandcamp, name: Bandcamp, aliases: [bc], category: music, url: {base: "https://bandcamp.com/search", placement: query, query_param: q}, verification: {status: verified}}
   - {id: soundcloud, name: SoundCloud, aliases: [sc], category: music, url: {base: "https://soundcloud.com/search", placement: query, query_param: q}, verification: {status: verified}}
   - {id: lastfm, name: Last.fm, category: music, url: {base: "https://www.last.fm/music", placement: path, template: "{query}"}, verification: {status: verified}}
-  - {id: metal-archives-band, name: Metal Archives - Band, aliases: [ma, metallum], category: music, url: {base: "https://www.metal-archives.com/search", placement: query, query_param: searchString, params: {type: band}}, verification: {status: verified}}
-  - {id: metal-archives-album, name: Metal Archives - Album, aliases: [ma-album], category: music, url: {base: "https://www.metal-archives.com/search", placement: query, query_param: searchString, params: {type: album}}, verification: {status: verified}}
+  - {id: metal-archives, name: Metal Archives, aliases: [ma, metallum], category: music, confidence: observed, url: {base: "https://www.metal-archives.com/search", placement: query, query_param: searchString}, targets: [{id: band, name: Band, params: {type: band}}, {id: album, name: Album, params: {type: album}}, {id: song, name: Song, params: {type: song_title}}], bindings: {kind: {param: type, values: {band: band, album: album, song: song_title}}}, verification: {status: verified}}
   - {id: setlist-fm, name: Setlist.fm, category: music, url: {base: "https://www.setlist.fm/search", placement: query, query_param: query}, verification: {status: verified}}
   - {id: songsterr, name: Songsterr, category: music, url: {base: "https://www.songsterr.com/a/wa/search", placement: query, query_param: pattern}, verification: {status: reachable}}
   - {id: pitchfork, name: Pitchfork, category: music, url: {base: "https://pitchfork.com/search/", placement: query, query_param: query}, verification: {status: reachable}}
@@ -131,19 +130,23 @@ engines:
   - {id: healthdirect, name: Healthdirect Australia, category: health, url: {base: "https://www.healthdirect.gov.au/search-results", placement: query, query_param: q}, verification: {status: regional}}
 
 presets:
-  - {id: google-images-large, name: Google Large Images, category: images, engine: google-images, aliases: [large], params: {tbs: "isz:l"}}
-  - {id: google-images-transparent, name: Google Transparent PNG, category: images, engine: google-images, aliases: [transparent, png], params: {tbs: "ic:trans"}}
-  - {id: google-images-icon, name: Google Icon Search, category: images, engine: google-images, aliases: [icon], query_suffix: icon, params: {tbs: "ic:trans,isz:i"}}
-  - {id: google-images-svg, name: Google SVG Search, category: images, engine: google-images, aliases: [svg], query_suffix: svg, params: {tbs: "ift:svg"}}
-  - {id: google-images-hd, name: Google Recent HD Images, category: images, engine: google-images, aliases: [hd], params: {tbs: "isz:l,qdr:y"}}
-  - {id: metal-band, name: Metal Band Search, category: music, engine: metal-archives-band, aliases: [band]}
-  - {id: metal-album, name: Metal Album Search, category: music, engine: metal-archives-album, aliases: [album]}
+  - {id: google-images-large, name: Google Large Images, engine: google-images, target: image, aliases: [large], modifiers: {size: large}}
+  - {id: google-images-transparent, name: Google Transparent PNG, engine: google-images, target: image, aliases: [transparent, png], modifiers: {color: transparent}}
+  - {id: google-images-icon, name: Google Icon Search, engine: google-images, target: image, aliases: [icon], query_suffix: icon, modifiers: {color: transparent, size: icon}}
+  - {id: google-images-svg, name: Google SVG Search, engine: google-images, target: image, aliases: [svg], query_suffix: svg, modifiers: {format: svg}}
+  - {id: google-images-hd, name: Google Recent HD Images, engine: google-images, target: image, aliases: [hd], modifiers: {size: large, since: year}}
+  - {id: metal-band, name: Metal Band Search, engine: metal-archives, target: band, aliases: [band]}
+  - {id: metal-album, name: Metal Album Search, engine: metal-archives, target: album, aliases: [album]}
   - {id: lyrics, name: Google Lyrics, category: lyrics, engine: google-lyrics, query_suffix: lyrics}
 
 search_sets:
   - {id: web-comparison, name: Web Comparison, category: web, engines: [google, brave, duckduckgo, bing]}
   - {id: ai-comparison, name: AI Comparison, category: ai, engines: [perplexity, chatgpt, claude, brave-ai]}
   - {id: artwork-search, name: Artwork Search, category: images, engines: [google-images, bing-images, openverse, wikimedia-commons]}
-  - {id: album-research, name: Album Research, category: music, engines: [musicbrainz, metal-archives-album, album-of-the-year, bandcamp]}
+  - {id: album-research, name: Album Research, category: music, targets: [{engine: musicbrainz}, {engine: metal-archives, target: album, preset: metal-album}, {engine: album-of-the-year}, {engine: bandcamp}]}
   - {id: developer-search, name: Developer Search, category: code, engines: [github, grep-app, sourcegraph, stackoverflow]}
   - {id: academic-research, name: Academic Research, category: research, engines: [google-scholar, semantic-scholar, crossref, arxiv]}
+
+legacy_targets:
+  - {id: metal-archives-band, target: {engine: metal-archives, target: band, preset: metal-band}}
+  - {id: metal-archives-album, target: {engine: metal-archives, target: album, preset: metal-album}}

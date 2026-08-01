@@ -16,20 +16,48 @@ type BuiltURL struct {
 }
 
 func Build(engine domain.Engine, preset *domain.Preset, request domain.SearchRequest) (string, error) {
+	var target *domain.EngineTarget
+	if preset != nil && preset.TargetID != "" {
+		for index := range engine.Targets {
+			if engine.Targets[index].ID == preset.TargetID {
+				target = &engine.Targets[index]
+				break
+			}
+		}
+	}
+	return BuildTarget(engine, target, preset, request)
+}
+
+func BuildTarget(engine domain.Engine, target *domain.EngineTarget, preset *domain.Preset, request domain.SearchRequest) (string, error) {
 	u, err := url.Parse(engine.URL.Base)
 	if err != nil {
 		return "", fmt.Errorf("parse base URL for %s: %w", engine.Name, err)
 	}
 	queryText := strings.TrimSpace(request.Query)
 	params := cloneMap(engine.URL.Params)
+	if target != nil {
+		for key, value := range target.Params {
+			params[key] = value
+		}
+	}
+	values := make(map[string]string)
 	if preset != nil {
 		queryText = strings.TrimSpace(strings.Join([]string{queryText, preset.QuerySuffix}, " "))
 		for key, value := range preset.Params {
 			params[key] = value
 		}
+		for key, value := range preset.Modifiers {
+			values[key] = value
+		}
+	}
+	for key, value := range request.Modifiers.Values {
+		if key == "type" && value == "svg" {
+			key = "format"
+		}
+		values[key] = value
 	}
 	queryText = applyTextModifiers(queryText, request.Modifiers)
-	applyValueModifiers(params, request.Modifiers.Values)
+	applyBindings(params, engine.Bindings, values)
 	for key, value := range request.Modifiers.RawQuery {
 		params[key] = value
 	}
@@ -95,33 +123,32 @@ func applyTextModifiers(queryText string, modifiers domain.Modifiers) string {
 	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
-func applyValueModifiers(params map[string]string, values map[string]string) {
-	if values == nil {
-		return
+func applyBindings(params map[string]string, bindings map[string]domain.ModifierBinding, values map[string]string) {
+	grouped := make(map[string][]string)
+	for groupID, value := range values {
+		binding, ok := bindings[groupID]
+		if !ok || value == "" {
+			continue
+		}
+		encoded := binding.Values[value]
+		if encoded == "" && binding.Template != "" {
+			encoded = fmt.Sprintf(binding.Template, value)
+		}
+		if encoded == "" {
+			continue
+		}
+		param := binding.Param
+		if param == "" {
+			continue
+		}
+		grouped[param] = append(grouped[param], encoded)
 	}
-	tbs := make([]string, 0, 4)
-	if existing := params["tbs"]; existing != "" {
-		tbs = append(tbs, strings.Split(existing, ",")...)
-	}
-	switch values["size"] {
-	case "large", "l":
-		tbs = append(tbs, "isz:l")
-	case "medium", "m":
-		tbs = append(tbs, "isz:m")
-	case "icon", "small", "s":
-		tbs = append(tbs, "isz:i")
-	}
-	if values["color"] == "transparent" {
-		tbs = append(tbs, "ic:trans")
-	}
-	if values["type"] == "svg" {
-		tbs = append(tbs, "ift:svg")
-	}
-	if since := values["since"]; since != "" {
-		tbs = append(tbs, "qdr:"+since)
-	}
-	if len(tbs) > 0 {
-		params["tbs"] = dedupeJoin(tbs)
+	for param, encoded := range grouped {
+		values := encoded
+		if existing := params[param]; existing != "" {
+			values = append(strings.Split(existing, ","), values...)
+		}
+		params[param] = dedupeJoin(values)
 	}
 }
 
