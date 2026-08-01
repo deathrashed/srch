@@ -76,6 +76,7 @@ type Model struct {
 	historyIndex   int
 	downloadKind   int
 	apiEngineIndex int
+	filterValues   map[string]string
 }
 
 type settingsState struct {
@@ -93,7 +94,7 @@ func New(environment *app.Environment) Model {
 	input.Focus()
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
-	m := Model{env: environment, input: input, spinner: spin, dark: true}
+	m := Model{env: environment, input: input, spinner: spin, dark: true, filterValues: make(map[string]string)}
 	for index, category := range searchCategories {
 		if category == environment.Config.DefaultCategory {
 			m.categoryIndex = index
@@ -556,7 +557,7 @@ func (m Model) currentTarget() *domain.EngineTarget {
 	return &value
 }
 func (m Model) currentRequest() domain.SearchRequest {
-	request := domain.SearchRequest{Query: m.input.Value(), CategoryID: m.currentCategory(), Action: domain.ActionOpen, Output: domain.OutputPlain, Modifiers: domain.Modifiers{Values: map[string]string{}, RawQuery: map[string]string{}}}
+	request := domain.SearchRequest{Query: m.input.Value(), CategoryID: m.currentCategory(), Action: domain.ActionOpen, Output: domain.OutputPlain, Modifiers: domain.Modifiers{Values: cloneStrings(m.filterValues), RawQuery: map[string]string{}}}
 	if engine := m.currentEngine(); engine != nil {
 		target := domain.SearchTarget{EngineID: engine.ID}
 		request.EngineIDs = []string{engine.ID}
@@ -605,26 +606,29 @@ func (m *Model) moveFocus(delta int) {
 	}
 }
 func (m Model) searchControlCount() int {
-	count := 3
-	if engine := m.currentEngine(); engine != nil && len(engine.Targets) > 1 {
-		count++
-	}
-	return count
+	return len(m.searchControls())
 }
 func (m *Model) changeFocused(delta int) {
-	switch m.focusIndex {
-	case 0:
+	controls := m.searchControls()
+	if m.focusIndex < 0 || m.focusIndex >= len(controls) {
+		return
+	}
+	switch control := controls[m.focusIndex]; control {
+	case "category":
 		m.changeCategory(delta)
-	case 1:
+	case "engine":
 		m.changeEngine(delta)
-	case 2:
+	case "target":
 		if engine := m.currentEngine(); engine != nil && len(engine.Targets) > 1 {
 			m.targetIndex = (m.targetIndex + delta + len(engine.Targets)) % len(engine.Targets)
-		} else {
-			m.changePreset(delta)
+			m.filterValues = make(map[string]string)
 		}
-	case 3:
+	case "preset":
 		m.changePreset(delta)
+	default:
+		if strings.HasPrefix(control, "filter:") {
+			m.changeFilter(strings.TrimPrefix(control, "filter:"), delta)
+		}
 	}
 }
 func (m *Model) changeCategory(delta int) {
@@ -632,6 +636,7 @@ func (m *Model) changeCategory(delta int) {
 	m.engineIndex = m.preferredEngineIndex()
 	m.targetIndex = 0
 	m.presetIndex = 0
+	m.filterValues = make(map[string]string)
 }
 func (m *Model) changeEngine(delta int) {
 	engines := m.currentEngines()
@@ -639,6 +644,7 @@ func (m *Model) changeEngine(delta int) {
 		m.engineIndex = (m.engineIndex + delta + len(engines)) % len(engines)
 		m.targetIndex = 0
 		m.presetIndex = 0
+		m.filterValues = make(map[string]string)
 	}
 }
 func (m *Model) changePreset(delta int) {
@@ -646,6 +652,50 @@ func (m *Model) changePreset(delta int) {
 	if len(presets) > 0 {
 		m.presetIndex = (m.presetIndex + delta + len(presets) + 1) % (len(presets) + 1)
 	}
+}
+
+func (m Model) searchControls() []string {
+	controls := []string{"category", "engine"}
+	if engine := m.currentEngine(); engine != nil && len(engine.Targets) > 1 {
+		controls = append(controls, "target")
+	}
+	if target := m.currentTarget(); target != nil {
+		for _, group := range target.OptionGroups {
+			controls = append(controls, "filter:"+group.ID)
+		}
+	}
+	if len(m.currentPresets()) > 0 {
+		controls = append(controls, "preset")
+	}
+	return append(controls, "query")
+}
+
+func (m *Model) changeFilter(groupID string, delta int) {
+	target := m.currentTarget()
+	if target == nil {
+		return
+	}
+	for _, group := range target.OptionGroups {
+		if group.ID != groupID || len(group.Options) == 0 {
+			continue
+		}
+		values := []string{""}
+		for _, option := range group.Options {
+			values = append(values, option.ID)
+		}
+		m.filterValues[groupID] = cycle(values, m.filterValues[groupID], delta)
+		return
+	}
+}
+
+func cloneStrings(source map[string]string) map[string]string {
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		if value != "" {
+			result[key] = value
+		}
+	}
+	return result
 }
 func (m Model) preferredEngineIndex() int {
 	engines := m.currentEngines()
@@ -707,10 +757,14 @@ func (m Model) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 			case "category":
 				m.categoryIndex = hit.index
 				m.engineIndex = m.preferredEngineIndex()
+				m.targetIndex = 0
 				m.presetIndex = 0
+				m.filterValues = make(map[string]string)
 			case "engine":
 				m.engineIndex = hit.index
+				m.targetIndex = 0
 				m.presetIndex = 0
+				m.filterValues = make(map[string]string)
 			case "palette":
 				return m.activatePalette(hit.index)
 			case "settings":

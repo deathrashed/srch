@@ -112,36 +112,57 @@ func (m Model) renderModeTabs(s styles, left, y int) (string, []hitRegion) {
 func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 	var rows []string
 	var hits []hitRegion
-	category, categoryHits := selectorRow("Category", searchCategories, m.categoryIndex, m.focusIndex == 0, s, left, y, m.contentWidth(), "category")
+	controlIndex := 0
+	category, categoryHits := selectorRow("Category", searchCategories, m.categoryIndex, m.focusIndex == controlIndex, s, left, y, m.contentWidth(), "category")
 	rows = append(rows, category)
 	hits = append(hits, categoryHits...)
 	y++
+	controlIndex++
 	engines := m.currentEngines()
 	engineNames := make([]string, len(engines))
 	for i, e := range engines {
 		engineNames[i] = e.Name
 	}
-	engine, engineHits := selectorRow("Engine", engineNames, m.engineIndex, m.focusIndex == 1, s, left, y, m.contentWidth(), "engine")
+	engine, engineHits := selectorRow("Engine", engineNames, m.engineIndex, m.focusIndex == controlIndex, s, left, y, m.contentWidth(), "engine")
 	rows = append(rows, engine)
 	hits = append(hits, engineHits...)
 	y++
+	controlIndex++
 	if active := m.currentEngine(); active != nil && len(active.Targets) > 1 {
 		names := make([]string, len(active.Targets))
 		for i, t := range active.Targets {
 			names[i] = t.Name
 		}
-		target, _ := selectorRow("Target", names, m.targetIndex, m.focusIndex == 2, s, left, y, m.contentWidth(), "")
+		target, _ := selectorRow("Target", names, m.targetIndex, m.focusIndex == controlIndex, s, left, y, m.contentWidth(), "")
 		rows = append(rows, target)
 		y++
+		controlIndex++
+	}
+	if target := m.currentTarget(); target != nil {
+		for _, group := range target.OptionGroups {
+			names := []string{"Any"}
+			selected := 0
+			for index, option := range group.Options {
+				names = append(names, option.Name)
+				if m.filterValues[group.ID] == option.ID {
+					selected = index + 1
+				}
+			}
+			row, _ := selectorRow(group.Name, names, selected, m.focusIndex == controlIndex, s, left, y, m.contentWidth(), "")
+			rows = append(rows, row)
+			y++
+			controlIndex++
+		}
 	}
 	if presets := m.currentPresets(); len(presets) > 0 {
 		names := []string{"None"}
 		for _, p := range presets {
 			names = append(names, p.Name)
 		}
-		preset, _ := selectorRow("Preset", names, m.presetIndex, m.focusIndex == m.searchControlCount()-2, s, left, y, m.contentWidth(), "")
+		preset, _ := selectorRow("Preset", names, m.presetIndex, m.focusIndex == controlIndex, s, left, y, m.contentWidth(), "")
 		rows = append(rows, preset)
 		y++
+		controlIndex++
 	}
 	if target := m.currentTarget(); target != nil {
 		for _, field := range target.Fields {

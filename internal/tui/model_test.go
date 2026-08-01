@@ -135,3 +135,32 @@ func TestHeaderCompactsInShortTerminal(t *testing.T) {
 		t.Fatal("compact header missing")
 	}
 }
+
+func TestGoogleImageFiltersAreVisibleAndComposable(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.width, model.height = 110, 40
+	model.categoryIndex = 1
+	model.engineIndex = model.preferredEngineIndex()
+	model.focusIndex = 2
+	view, _ := model.render()
+	for _, label := range []string{"Size", "Color", "Format", "Recency"} {
+		if !strings.Contains(view, label) {
+			t.Fatalf("missing filter row %s", label)
+		}
+	}
+	model.filterValues["size"] = "large"
+	model.filterValues["color"] = "transparent"
+	model.filterValues["format"] = "svg"
+	urls, err := model.env.URLs(model.currentRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(urls) != 1 {
+		t.Fatal("expected one URL")
+	}
+	for _, part := range []string{"isz%3Al", "ic%3Atrans", "ift%3Asvg"} {
+		if !strings.Contains(urls[0].URL, part) {
+			t.Fatalf("URL %q missing %q", urls[0].URL, part)
+		}
+	}
+}
