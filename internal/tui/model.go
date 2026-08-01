@@ -71,10 +71,11 @@ type Model struct {
 	presetIndex   int
 	focusIndex    int
 
-	paletteIndex int
-	settings     settingsState
-	historyIndex int
-	downloadKind int
+	paletteIndex   int
+	settings       settingsState
+	historyIndex   int
+	downloadKind   int
+	apiEngineIndex int
 }
 
 type settingsState struct {
@@ -100,6 +101,7 @@ func New(environment *app.Environment) Model {
 		}
 	}
 	m.engineIndex = m.preferredEngineIndex()
+	m.focusIndex = m.searchControlCount() - 1
 	return m
 }
 
@@ -143,7 +145,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+p":
 			m.openPalette()
 			return m, nil
-		case "ctrl+,", "ctrl+s":
+		case "ctrl+,":
 			m.openSettings()
 			return m, nil
 		case "?":
@@ -301,10 +303,13 @@ func (m Model) updateAPI(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if ok {
 		switch key.String() {
 		case "left", "right":
-			m.changeEngine(1)
+			engines := m.apiEngines()
+			if len(engines) > 0 {
+				m.apiEngineIndex = (m.apiEngineIndex + 1) % len(engines)
+			}
 			return m, nil
 		case "enter":
-			request := m.currentRequest()
+			request := m.apiRequest()
 			urls, err := m.env.URLs(request)
 			if err != nil || len(urls) == 0 {
 				if err != nil {
@@ -563,6 +568,29 @@ func (m Model) currentRequest() domain.SearchRequest {
 			request.PresetID = preset.ID
 		}
 		request.Targets = []domain.SearchTarget{target}
+	}
+	return request
+}
+
+func (m Model) apiEngines() []domain.Engine {
+	all := m.env.Catalog.Engines("", false)
+	result := make([]domain.Engine, 0)
+	for _, engine := range all {
+		if engine.Verification.Status == domain.StatusAPI {
+			result = append(result, engine)
+		}
+	}
+	return result
+}
+
+func (m Model) apiRequest() domain.SearchRequest {
+	engines := m.apiEngines()
+	request := domain.SearchRequest{Query: m.input.Value(), Action: domain.ActionPrint, Output: domain.OutputJSON, Modifiers: domain.Modifiers{Values: map[string]string{}, RawQuery: map[string]string{}}}
+	if len(engines) > 0 {
+		engine := engines[m.apiEngineIndex%len(engines)]
+		request.CategoryID = engine.Category
+		request.EngineIDs = []string{engine.ID}
+		request.Targets = []domain.SearchTarget{{EngineID: engine.ID}}
 	}
 	return request
 }

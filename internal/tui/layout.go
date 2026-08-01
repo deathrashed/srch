@@ -166,10 +166,17 @@ func selectorRow(label string, items []string, selected int, focused bool, s sty
 	if len(items) == 0 {
 		return s.muted.Render(label + "  unavailable"), nil
 	}
-	parts := make([]string, len(items))
+	start, end := 0, len(items)
+	if len(items) > 5 {
+		start = max(0, selected-2)
+		end = min(len(items), start+5)
+		start = max(0, end-5)
+	}
+	parts := make([]string, 0, end-start)
 	hits := []hitRegion{}
 	cursor := left + 12
-	for i, item := range items {
+	for i := start; i < end; i++ {
+		item := items[i]
 		style := s.tab
 		if i == selected {
 			style = s.selected
@@ -177,11 +184,12 @@ func selectorRow(label string, items []string, selected int, focused bool, s sty
 				style = s.focused
 			}
 		}
-		parts[i] = style.Render(item)
+		part := style.Render(item)
+		parts = append(parts, part)
 		if action != "" {
-			hits = append(hits, hitRegion{x: cursor, y: y, w: lipgloss.Width(parts[i]), action: action, index: i})
+			hits = append(hits, hitRegion{x: cursor, y: y, w: lipgloss.Width(part), action: action, index: i})
 		}
-		cursor += lipgloss.Width(parts[i]) + 1
+		cursor += lipgloss.Width(part) + 1
 	}
 	prefix := s.muted.Width(10).Render(label)
 	return prefix + "  " + truncateJoined(parts, width-12), hits
@@ -202,7 +210,11 @@ func (m Model) renderDownloader(s styles) string {
 	return taskView(s, "Downloader", "Mode: "+s.selected.Render(kinds[m.downloadKind])+"   ←/→ changes mode\nDownloads save to "+m.env.Config.DownloadDir, m.input.View(), m.content, m.status, m.busy, m.spinner.View())
 }
 func (m Model) renderAPI(s styles) string {
-	return taskView(s, "API", "Compile a structured request using the active Search engine. API-backed adapters are identified by the catalog.", m.input.View(), m.content, m.status, m.busy, m.spinner.View())
+	engine := "No API adapters"
+	if engines := m.apiEngines(); len(engines) > 0 {
+		engine = engines[m.apiEngineIndex%len(engines)].Name
+	}
+	return taskView(s, "API", "Engine: "+s.selected.Render(engine)+"   ←/→ changes adapter\nCompile an API-backed request and inspect its URL or returned content.", m.input.View(), m.content, m.status, m.busy, m.spinner.View())
 }
 func taskView(s styles, title, description, input, content, status string, busy bool, spin string) string {
 	parts := []string{s.title.Render(title), s.muted.Render(description), s.input.Render(input)}
@@ -267,11 +279,11 @@ func (m Model) renderSettings(s styles, left, y int) (string, []hitRegion) {
 	hits := []hitRegion{}
 	for i, row := range rows {
 		marker := "  "
-		name := s.base.Width(22).Render(row[0])
+		name := s.base.Render(fmt.Sprintf("%-20s", row[0]))
 		value := s.selected.Render(row[1])
 		if i == m.settings.index {
 			marker = "› "
-			name = s.focused.Width(22).Render(row[0])
+			name = s.focused.Render(fmt.Sprintf("%-20s", row[0]))
 		}
 		line := marker + name + "  " + value
 		lines = append(lines, line)

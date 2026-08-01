@@ -17,6 +17,7 @@ type CategoryPreference struct {
 }
 
 type Config struct {
+	Version         int                           `toml:"version"`
 	DefaultCategory string                        `toml:"default_category"`
 	DefaultBrowser  string                        `toml:"default_browser,omitempty"`
 	InputPosition   string                        `toml:"input_position"`
@@ -43,6 +44,7 @@ type Paths struct {
 
 func Defaults() Config {
 	return Config{
+		Version:         2,
 		DefaultCategory: "web",
 		InputPosition:   "bottom",
 		HeaderMode:      "auto",
@@ -59,7 +61,7 @@ func Defaults() Config {
 			"web":      {DefaultEngine: "google", Alternates: []string{"brave", "duckduckgo", "kagi"}},
 			"images":   {DefaultEngine: "google-images", DefaultPreset: "google-images-large", Alternates: []string{"bing-images", "openverse", "wikimedia-commons"}},
 			"ai":       {DefaultEngine: "perplexity", Alternates: []string{"chatgpt", "claude", "brave-ai"}},
-			"music":    {DefaultEngine: "musicbrainz", Alternates: []string{"spotify", "bandcamp", "metal-archives-band"}},
+			"music":    {DefaultEngine: "musicbrainz", Alternates: []string{"spotify", "bandcamp", "metal-archives"}},
 			"lyrics":   {DefaultEngine: "genius", Alternates: []string{"google-lyrics", "azlyrics"}},
 			"code":     {DefaultEngine: "github", Alternates: []string{"grep-app", "sourcegraph", "stackoverflow"}},
 			"research": {DefaultEngine: "google-scholar", Alternates: []string{"crossref", "arxiv", "pubmed"}},
@@ -119,8 +121,26 @@ func Load(paths Paths) (Config, error) {
 	if err != nil {
 		return cfg, fmt.Errorf("read config: %w", err)
 	}
+	var stored struct {
+		Version int `toml:"version"`
+	}
+	if err := toml.Unmarshal(data, &stored); err != nil {
+		return Defaults(), fmt.Errorf("parse config version: %w", err)
+	}
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return Defaults(), fmt.Errorf("parse config: %w", err)
+	}
+	if stored.Version < 2 {
+		migrateV2(&cfg)
+		backup := filepath.Join(paths.ConfigDir, "config.toml.v1.bak")
+		if _, statErr := os.Stat(backup); errors.Is(statErr, os.ErrNotExist) {
+			if writeErr := os.WriteFile(backup, data, 0o600); writeErr != nil {
+				return Defaults(), fmt.Errorf("back up version 1 config: %w", writeErr)
+			}
+		}
+		if err := Save(paths, cfg); err != nil {
+			return Defaults(), fmt.Errorf("save migrated config: %w", err)
+		}
 	}
 	if cfg.HistoryLimit <= 0 {
 		cfg.HistoryLimit = 1000
@@ -129,6 +149,35 @@ func Load(paths Paths) (Config, error) {
 		cfg.DownloadDir = paths.Downloads
 	}
 	return cfg, nil
+}
+
+func migrateV2(cfg *Config) {
+	cfg.Version = 2
+	for category, preference := range cfg.Categories {
+		if preference.DefaultEngine == "metal-archives-band" || preference.DefaultEngine == "metal-archives-album" {
+			preference.DefaultEngine = "metal-archives"
+		}
+		for index, engineID := range preference.Alternates {
+			if engineID == "metal-archives-band" || engineID == "metal-archives-album" {
+				preference.Alternates[index] = "metal-archives"
+			}
+		}
+		preference.Alternates = unique(preference.Alternates)
+		cfg.Categories[category] = preference
+	}
+}
+
+func unique(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func Save(paths Paths, cfg Config) error {
