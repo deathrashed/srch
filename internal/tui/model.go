@@ -63,7 +63,6 @@ type Model struct {
 	status  string
 	busy    bool
 	content string
-	hits    []hitRegion
 
 	categoryIndex int
 	engineIndex   int
@@ -181,8 +180,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() tea.View {
-	content, hits := m.render()
-	m.hits = hits
+	content, _ := m.render()
 	view := tea.NewView(content)
 	view.AltScreen = true
 	if m.env.Config.Mouse {
@@ -749,7 +747,8 @@ func cloneConfig(source config.Config) config.Config {
 }
 
 func (m Model) handleMouse(x, y int) (tea.Model, tea.Cmd) {
-	for _, hit := range m.hits {
+	_, hits := m.render()
+	for _, hit := range hits {
 		if y == hit.y && x >= hit.x && x < hit.x+hit.w {
 			switch hit.action {
 			case "mode":

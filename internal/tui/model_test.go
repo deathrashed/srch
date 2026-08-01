@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 
 	"srch/internal/app"
 	"srch/internal/catalog"
@@ -107,7 +108,6 @@ func TestMouseUsesRenderedHitRegions(t *testing.T) {
 	model := New(testEnvironment(t))
 	model.width, model.height = 110, 34
 	_, hits := model.render()
-	model.hits = hits
 	var reader hitRegion
 	for _, hit := range hits {
 		if hit.action == "mode" && hit.index == int(ModeReader) {
@@ -118,9 +118,34 @@ func TestMouseUsesRenderedHitRegions(t *testing.T) {
 	if reader.w == 0 {
 		t.Fatal("reader hit region missing")
 	}
+	expectedY := lipgloss.Height(model.renderHeader(newStyles(true)))
+	if reader.y != expectedY {
+		t.Fatalf("reader hit region y=%d, want rendered mode row y=%d", reader.y, expectedY)
+	}
 	updated, _ := model.handleMouse(reader.x, reader.y)
 	if updated.(Model).mode != ModeReader {
 		t.Fatal("mouse did not activate Reader")
+	}
+}
+
+func TestMouseCyclesSourceWithoutStoredViewState(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.width, model.height = 110, 34
+	_, hits := model.render()
+	var category hitRegion
+	for _, hit := range hits {
+		if hit.action == "category" {
+			category = hit
+			break
+		}
+	}
+	if category.w == 0 {
+		t.Fatal("category hit region missing")
+	}
+	initial := model.categoryIndex
+	updated, _ := model.handleMouse(category.x, category.y)
+	if updated.(Model).categoryIndex == initial {
+		t.Fatal("category click did not cycle the current source")
 	}
 }
 
@@ -169,7 +194,7 @@ func TestSearchWorkspaceHasClearVisualHierarchy(t *testing.T) {
 	model := New(testEnvironment(t))
 	model.width, model.height = 110, 40
 	view, _ := model.render()
-	for _, label := range []string{"Search workspace", "SOURCE", "QUERY", "of"} {
+	for _, label := range []string{"SOURCE", "QUERY", "of", "1 Search", "2 Reader"} {
 		if !strings.Contains(view, label) {
 			t.Fatalf("search workspace missing %q", label)
 		}

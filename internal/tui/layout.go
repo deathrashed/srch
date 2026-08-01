@@ -50,18 +50,18 @@ func (m Model) render() (string, []hitRegion) {
 	var lines []string
 	header := m.renderHeader(s)
 	lines = append(lines, header)
-	y := lipgloss.Height(header) + 1
-	modeLine, modeHits := m.renderModeTabs(s, left, y)
+	modeY := lipgloss.Height(header)
+	modeLine, modeHits := m.renderModeTabs(s, left, modeY)
 	lines = append(lines, modeLine)
 	hits = append(hits, modeHits...)
-	y++
+	bodyY := modeY + 1
 	var body string
 	var bodyHits []hitRegion
 	switch m.overlay {
 	case overlayPalette:
-		body, bodyHits = m.renderPalette(s, left, y+1)
+		body, bodyHits = m.renderPalette(s, left, bodyY)
 	case overlaySettings:
-		body, bodyHits = m.renderSettings(s, left, y+1)
+		body, bodyHits = m.renderSettings(s, left, bodyY)
 	case overlayHelp:
 		body = m.renderHelp(s)
 	case overlayDetails:
@@ -69,7 +69,7 @@ func (m Model) render() (string, []hitRegion) {
 	default:
 		switch m.mode {
 		case ModeSearch:
-			body, bodyHits = m.renderSearch(s, left, y+1)
+			body, bodyHits = m.renderSearch(s, left, bodyY)
 		case ModeReader:
 			body = m.renderReader(s)
 		case ModeDownloader:
@@ -106,10 +106,11 @@ func (m Model) renderModeTabs(s styles, left, y int) (string, []hitRegion) {
 	hits := make([]hitRegion, 0, len(parts))
 	plainWidth := 0
 	for i, name := range modeNames {
+		label := fmt.Sprintf("%d %s", i+1, name)
 		if Mode(i) == m.mode {
-			parts[i] = s.active.Render(name)
+			parts[i] = s.active.Render(label)
 		} else {
-			parts[i] = s.tab.Render(name)
+			parts[i] = s.tab.Render(label)
 		}
 		plainWidth += lipgloss.Width(parts[i])
 		if i > 0 {
@@ -127,13 +128,11 @@ func (m Model) renderModeTabs(s styles, left, y int) (string, []hitRegion) {
 
 func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 	rows := []string{
-		s.title.Render("Search workspace"),
-		s.muted.Render("Choose a source, refine it when filters are available, then enter your query."),
 		"",
-		s.section.Render("SOURCE"),
+		sectionLine(s, "SOURCE", m.contentWidth()),
 	}
 	var hits []hitRegion
-	y += 4
+	y += 2
 	controlIndex := 0
 	categoryNames := make([]string, len(searchCategories))
 	for index, categoryID := range searchCategories {
@@ -168,7 +167,7 @@ func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 	presets := m.currentPresets()
 	hasRefinements := (target != nil && len(target.OptionGroups) > 0) || len(presets) > 0
 	if hasRefinements {
-		rows = append(rows, "", s.section.Render("REFINE"))
+		rows = append(rows, "", sectionLine(s, "REFINE", m.contentWidth()))
 		y += 2
 	}
 	if target != nil {
@@ -203,7 +202,7 @@ func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 			y++
 		}
 	}
-	rows = append(rows, "", s.section.Render("QUERY"))
+	rows = append(rows, "", sectionLine(s, "QUERY", m.contentWidth()))
 	inputStyle := s.input
 	if m.focusIndex == controlIndex {
 		inputStyle = s.inputFocused
@@ -217,7 +216,7 @@ func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 		}
 		rows = append(rows, s.status.Render(status))
 	}
-	rows = append(rows, "", footer(s, "tab", "next field", "←/→", "change selection", "/", "query", "enter", "open", "ctrl+p", "commands", "ctrl+,", "settings"))
+	rows = append(rows, "", s.muted.Render(strings.Repeat("─", m.contentWidth())), footer(s, "tab", "next field", "←/→", "change", "/", "query", "enter", "open", "ctrl+p", "commands", "ctrl+,", "settings"))
 	return strings.Join(rows, "\n"), hits
 }
 
@@ -235,7 +234,7 @@ func selectorRow(label string, items []string, selected int, focused bool, s sty
 		valueStyle = s.selectedFocused
 	}
 	prefix := marker + labelStyle.Width(11).Render(label)
-	valueWidth := max(18, min(42, width-34))
+	valueWidth := max(18, min(30, width-34))
 	value := valueStyle.Width(valueWidth).Render(items[selected])
 	position := s.muted.Render(fmt.Sprintf("%d of %d", selected+1, len(items)))
 	hint := ""
@@ -248,6 +247,11 @@ func selectorRow(label string, items []string, selected int, focused bool, s sty
 		hits = append(hits, hitRegion{x: left + 15, y: y, w: valueWidth, action: action, index: next})
 	}
 	return prefix + "  " + value + "  " + position + hint, hits
+}
+
+func sectionLine(s styles, label string, width int) string {
+	prefix := "─ " + label + " "
+	return s.section.Render(prefix + strings.Repeat("─", max(0, width-lipgloss.Width(prefix))))
 }
 
 func categoryName(id string) string {
@@ -341,7 +345,7 @@ func (m Model) renderPalette(s styles, left, y int) (string, []hitRegion) {
 		}
 		line := style.Render(prefix + item)
 		lines = append(lines, line)
-		hits = append(hits, hitRegion{x: left + 2, y: y + 1 + i, w: lipgloss.Width(line), action: "palette", index: i})
+		hits = append(hits, hitRegion{x: left + 2, y: y + 2 + i, w: lipgloss.Width(line), action: "palette", index: i})
 	}
 	lines = append(lines, "", footer(s, "↑/↓", "choose", "enter", "run", "esc", "close"))
 	return s.panel.Width(max(40, min(70, m.contentWidth()-2))).Render(strings.Join(lines, "\n")), hits
@@ -361,7 +365,7 @@ func (m Model) renderSettings(s styles, left, y int) (string, []hitRegion) {
 		}
 		line := marker + name + "  " + value
 		lines = append(lines, line)
-		hits = append(hits, hitRegion{x: left + 2, y: y + 3 + i, w: lipgloss.Width(line), action: "settings", index: i})
+		hits = append(hits, hitRegion{x: left + 2, y: y + 4 + i, w: lipgloss.Width(line), action: "settings", index: i})
 	}
 	lines = append(lines, "", footer(s, "↑/↓", "setting", "←/→", "change", "ctrl+s", "apply", "esc", "discard"))
 	return s.panel.Width(max(44, min(76, m.contentWidth()-2))).Render(strings.Join(lines, "\n")), hits
