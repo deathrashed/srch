@@ -169,12 +169,15 @@ func TestSearchWorkspaceHasClearVisualHierarchy(t *testing.T) {
 	model := New(testEnvironment(t))
 	model.width, model.height = 110, 40
 	view, _ := model.render()
-	for _, label := range []string{"Search workspace", "BROWSE", "REFINE", "QUERY", "‹", "›"} {
+	for _, label := range []string{"Search workspace", "SOURCE", "QUERY", "of"} {
 		if !strings.Contains(view, label) {
 			t.Fatalf("search workspace missing %q", label)
 		}
 	}
 	if strings.Contains(view, "Category  web") {
 		t.Fatal("category identifiers should be rendered as display labels")
+	}
+	if strings.Contains(view, "Baidu") {
+		t.Fatal("inactive engine alternatives should not compete with the current selection")
 	}
 }

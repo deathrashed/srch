@@ -28,7 +28,7 @@ func newStyles(dark bool) styles {
 		section: base.Foreground(muted).Bold(true), panel: base.Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#4A4655")).Padding(0, 1),
 		input: base.Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#4A4655")).Padding(0, 1), inputFocused: base.Border(lipgloss.RoundedBorder()).BorderForeground(hot).Padding(0, 1),
 		tab: base.Foreground(muted).Padding(0, 1), active: base.Foreground(lipgloss.Color("#F8F5FF")).Background(accent).Bold(true).Padding(0, 1), focused: base.Foreground(hot).Bold(true),
-		selected: base.Foreground(lipgloss.Color("#F8F5FF")).Background(accent).Bold(true).Padding(0, 1), selectedFocused: base.Foreground(lipgloss.Color("#17141F")).Background(hot).Bold(true).Padding(0, 1),
+		selected: base.Foreground(accent).Bold(true).Padding(0, 1), selectedFocused: base.Foreground(lipgloss.Color("#17141F")).Background(hot).Bold(true).Padding(0, 1),
 		muted: base.Foreground(muted), status: base.Foreground(muted).PaddingTop(1), key: base.Foreground(border).Bold(true),
 		success: base.Foreground(lipgloss.Color("#50FA7B")), warning: base.Foreground(lipgloss.Color("#F1FA8C")),
 	}
@@ -130,7 +130,7 @@ func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 		s.title.Render("Search workspace"),
 		s.muted.Render("Choose a source, refine it when filters are available, then enter your query."),
 		"",
-		s.section.Render("BROWSE"),
+		s.section.Render("SOURCE"),
 	}
 	var hits []hitRegion
 	y += 4
@@ -164,12 +164,15 @@ func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 		y++
 		controlIndex++
 	}
-	rows = append(rows, "", s.section.Render("REFINE"))
-	y += 2
-	hasRefinements := false
-	if target := m.currentTarget(); target != nil {
+	target := m.currentTarget()
+	presets := m.currentPresets()
+	hasRefinements := (target != nil && len(target.OptionGroups) > 0) || len(presets) > 0
+	if hasRefinements {
+		rows = append(rows, "", s.section.Render("REFINE"))
+		y += 2
+	}
+	if target != nil {
 		for _, group := range target.OptionGroups {
-			hasRefinements = true
 			names := []string{"Any"}
 			selected := 0
 			for index, option := range group.Options {
@@ -184,8 +187,7 @@ func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 			controlIndex++
 		}
 	}
-	if presets := m.currentPresets(); len(presets) > 0 {
-		hasRefinements = true
+	if len(presets) > 0 {
 		names := []string{"None"}
 		for _, p := range presets {
 			names = append(names, p.Name)
@@ -195,11 +197,7 @@ func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 		y++
 		controlIndex++
 	}
-	if !hasRefinements {
-		rows = append(rows, s.muted.Render("  No additional filters for this source."))
-		y++
-	}
-	if target := m.currentTarget(); target != nil {
+	if target != nil {
 		for _, field := range target.Fields {
 			rows = append(rows, s.muted.Render(field.Name+": ")+field.Placeholder)
 			y++
@@ -227,43 +225,29 @@ func selectorRow(label string, items []string, selected int, focused bool, s sty
 	if len(items) == 0 {
 		return s.muted.Render(label + "  unavailable"), nil
 	}
-	start, end := 0, len(items)
-	if len(items) > 5 {
-		start = max(0, selected-2)
-		end = min(len(items), start+5)
-		start = max(0, end-5)
-	}
-	parts := make([]string, 0, end-start)
-	hits := []hitRegion{}
-	cursor := left + 17
-	for i := start; i < end; i++ {
-		item := items[i]
-		style := s.tab
-		if i == selected {
-			style = s.selected
-			if focused {
-				style = s.selectedFocused
-			}
-		}
-		part := style.Render(item)
-		parts = append(parts, part)
-		if action != "" {
-			hits = append(hits, hitRegion{x: cursor, y: y, w: lipgloss.Width(part), action: action, index: i})
-		}
-		cursor += lipgloss.Width(part) + 1
-	}
+	selected = min(max(selected, 0), len(items)-1)
 	marker := "  "
 	labelStyle := s.muted
+	valueStyle := s.selected
 	if focused {
 		marker = s.focused.Render("› ")
 		labelStyle = s.focused
+		valueStyle = s.selectedFocused
 	}
 	prefix := marker + labelStyle.Width(11).Render(label)
-	position := ""
-	if len(items) > 5 {
-		position = s.muted.Render(fmt.Sprintf("  %d/%d", selected+1, len(items)))
+	valueWidth := max(18, min(42, width-34))
+	value := valueStyle.Width(valueWidth).Render(items[selected])
+	position := s.muted.Render(fmt.Sprintf("%d of %d", selected+1, len(items)))
+	hint := ""
+	if focused {
+		hint = "  " + s.key.Render("←/→") + " " + s.muted.Render("change")
 	}
-	return prefix + "  " + s.muted.Render("‹") + " " + truncateJoined(parts, width-22) + " " + s.muted.Render("›") + position, hits
+	hits := []hitRegion{}
+	if action != "" {
+		next := (selected + 1) % len(items)
+		hits = append(hits, hitRegion{x: left + 15, y: y, w: valueWidth, action: action, index: next})
+	}
+	return prefix + "  " + value + "  " + position + hint, hits
 }
 
 func categoryName(id string) string {
@@ -292,14 +276,6 @@ func categoryName(id string) string {
 		return id
 	}
 }
-func truncateJoined(parts []string, width int) string {
-	joined := strings.Join(parts, " ")
-	if lipgloss.Width(joined) <= width {
-		return joined
-	}
-	return lipgloss.NewStyle().MaxWidth(width).Render(joined)
-}
-
 func (m Model) renderReader(s styles) string {
 	return taskView(s, "Reader", "Enter a URL. Built-in extraction uses Defuddle and renders Markdown with Glamour.", m.input.View(), m.content, m.status, m.busy, m.spinner.View())
 }
