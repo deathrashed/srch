@@ -164,3 +164,17 @@ func TestGoogleImageFiltersAreVisibleAndComposable(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchWorkspaceHasClearVisualHierarchy(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.width, model.height = 110, 40
+	view, _ := model.render()
+	for _, label := range []string{"Search workspace", "BROWSE", "REFINE", "QUERY", "‹", "›"} {
+		if !strings.Contains(view, label) {
+			t.Fatalf("search workspace missing %q", label)
+		}
+	}
+	if strings.Contains(view, "Category  web") {
+		t.Fatal("category identifiers should be rendered as display labels")
+	}
+}
