@@ -24,14 +24,7 @@ func testEnvironment(t *testing.T) *app.Environment {
 	paths := config.Paths{ConfigDir: filepath.Join(directory, "config"), DataDir: filepath.Join(directory, "data"), CacheDir: filepath.Join(directory, "cache"), Downloads: filepath.Join(directory, "downloads")}
 	cfg := config.Defaults()
 	cfg.DownloadDir = paths.Downloads
-	return &app.Environment{
-		Config:   cfg,
-		Paths:    paths,
-		Catalog:  cat,
-		Platform: platform.Services{},
-		History:  state.HistoryStore{Path: filepath.Join(paths.DataDir, "history.json"), Limit: 20},
-		Library:  state.Library{ProfilePath: filepath.Join(paths.DataDir, "profiles.json"), FavouritePath: filepath.Join(paths.DataDir, "favourites.json")},
-	}
+	return &app.Environment{Config: cfg, Paths: paths, Catalog: cat, Platform: platform.Services{}, History: state.HistoryStore{Path: filepath.Join(paths.DataDir, "history.json"), Limit: 20}, Library: state.Library{ProfilePath: filepath.Join(paths.DataDir, "profiles.json"), FavouritePath: filepath.Join(paths.DataDir, "favourites.json")}}
 }
 
 func updateModel(t *testing.T, model Model, message tea.Msg) Model {
@@ -44,65 +37,101 @@ func updateModel(t *testing.T, model Model, message tea.Msg) Model {
 	return result
 }
 
-func TestKeyboardNavigationAndPalette(t *testing.T) {
+func TestSearchViewUsesProductNavigation(t *testing.T) {
 	model := New(testEnvironment(t))
-	model.width, model.height = 150, 48
-
-	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
-	if got := model.currentCategory(); got != "images" {
-		t.Fatalf("right arrow category = %q, want images", got)
+	model.width, model.height = 110, 34
+	view, _ := model.render()
+	for _, label := range []string{"Search", "Reader", "Downloader", "API", "History"} {
+		if !strings.Contains(view, label) {
+			t.Fatalf("missing %s", label)
+		}
 	}
+	for _, rejected := range []string{"More:Video", "Search Scope", "Request Preview", "★ Preferred"} {
+		if strings.Contains(view, rejected) {
+			t.Fatalf("unexpected %q", rejected)
+		}
+	}
+}
 
+func TestModeNavigationAndPalette(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.width, model.height = 110, 34
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyRight, Mod: tea.ModAlt}))
+	if model.mode != ModeReader {
+		t.Fatalf("mode=%v", model.mode)
+	}
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: 'p', Mod: tea.ModCtrl}))
-	if !model.drawerOpen {
-		t.Fatal("Ctrl+P did not open the command palette")
+	if model.overlay != overlayPalette {
+		t.Fatal("Ctrl+P did not open palette")
 	}
-
-	model.drawerOpen = false
-	model.input.SetValue("editable query")
-	category := model.currentCategory()
-	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyLeft}))
-	if model.currentCategory() != category {
-		t.Fatal("left arrow changed category while editing a query")
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if model.overlay != overlayNone {
+		t.Fatal("escape did not close palette")
 	}
 }
 
-func TestMouseCategoryAndPaletteSelection(t *testing.T) {
+func TestEngineChangeClearsForeignPreset(t *testing.T) {
 	model := New(testEnvironment(t))
-	model.width, model.height = 150, 48
-	styles := newStyles(true)
-	left := (model.width - model.contentWidth()) / 2
-	tabY := lipglossHeight(model.renderHeader(styles)) + 1
-	webWidth := len(" Web ")
-
-	updated, _ := model.handleMouseClick(left+webWidth+2, tabY)
-	model = updated.(Model)
-	if got := model.currentCategory(); got != "images" {
-		t.Fatalf("mouse category = %q, want images", got)
+	model.categoryIndex = 1
+	model.engineIndex = model.preferredEngineIndex()
+	model.presetIndex = 1
+	if model.currentPreset() == nil {
+		t.Fatal("expected Google preset")
 	}
-	engineBefore := model.engineIndex
-	updated, _ = model.handleMouseClick(left+model.contentWidth()-4, tabY+2)
-	model = updated.(Model)
-	if model.engineIndex == engineBefore {
-		t.Fatal("clicking the engine row did not change engines")
+	model.changeEngine(1)
+	if preset := model.currentPreset(); preset != nil && preset.EngineID != "bing-images" {
+		t.Fatalf("foreign preset survived: %#v", preset)
 	}
-
-	model.drawerOpen = true
-	settingsIndex := 6
-	firstItemY := lipglossHeight(model.renderHeader(styles)) + 4
-	updated, _ = model.handleMouseClick(left+4, firstItemY+settingsIndex)
-	model = updated.(Model)
-	if model.settings == nil {
-		t.Fatal("clicking Settings did not open the settings form")
-	}
-	if view := model.render(); !strings.Contains(view, "SETTINGS") || !strings.Contains(view, "Search defaults (1/3)") {
-		t.Fatal("settings view does not preserve the header and first settings page")
+	request := model.currentRequest()
+	if request.EngineIDs[0] != model.currentEngine().ID || request.EngineIDs[0] == "google-images" {
+		t.Fatalf("displayed engine differs from request: %#v", request)
 	}
 }
 
-func lipglossHeight(value string) int {
-	if value == "" {
-		return 0
+func TestSettingsAreTransactional(t *testing.T) {
+	env := testEnvironment(t)
+	model := New(env)
+	original := env.Config.DefaultCategory
+	model.openSettings()
+	model.changeSetting(1)
+	if env.Config.DefaultCategory != original {
+		t.Fatal("draft mutated live config")
 	}
-	return strings.Count(value, "\n") + 1
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if env.Config.DefaultCategory != original {
+		t.Fatal("discard changed live config")
+	}
+}
+
+func TestMouseUsesRenderedHitRegions(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.width, model.height = 110, 34
+	_, hits := model.render()
+	model.hits = hits
+	var reader hitRegion
+	for _, hit := range hits {
+		if hit.action == "mode" && hit.index == int(ModeReader) {
+			reader = hit
+			break
+		}
+	}
+	if reader.w == 0 {
+		t.Fatal("reader hit region missing")
+	}
+	updated, _ := model.handleMouse(reader.x, reader.y)
+	if updated.(Model).mode != ModeReader {
+		t.Fatal("mouse did not activate Reader")
+	}
+}
+
+func TestHeaderCompactsInShortTerminal(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.width, model.height = 110, 12
+	header := model.renderHeader(newStyles(true))
+	if strings.Contains(header, "███████") {
+		t.Fatal("short terminal retained large banner")
+	}
+	if !strings.Contains(header, "SRCH") {
+		t.Fatal("compact header missing")
+	}
 }
