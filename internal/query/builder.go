@@ -51,9 +51,6 @@ func BuildTarget(engine domain.Engine, target *domain.EngineTarget, preset *doma
 		}
 	}
 	for key, value := range request.Modifiers.Values {
-		if key == "type" && value == "svg" {
-			key = "format"
-		}
 		values[key] = value
 	}
 	queryText = applyTextModifiers(queryText, request.Modifiers)
@@ -124,7 +121,11 @@ func applyTextModifiers(queryText string, modifiers domain.Modifiers) string {
 }
 
 func applyBindings(params map[string]string, bindings map[string]domain.ModifierBinding, values map[string]string) {
-	grouped := make(map[string][]string)
+	type bindingValues struct {
+		values []string
+		join   string
+	}
+	grouped := make(map[string]bindingValues)
 	for groupID, value := range values {
 		binding, ok := bindings[groupID]
 		if !ok || value == "" {
@@ -141,14 +142,25 @@ func applyBindings(params map[string]string, bindings map[string]domain.Modifier
 		if param == "" {
 			continue
 		}
-		grouped[param] = append(grouped[param], encoded)
-	}
-	for param, encoded := range grouped {
-		values := encoded
-		if existing := params[param]; existing != "" {
-			values = append(strings.Split(existing, ","), values...)
+		group := grouped[param]
+		group.values = append(group.values, encoded)
+		if binding.Join != "" {
+			group.join = binding.Join
 		}
-		params[param] = dedupeJoin(values)
+		grouped[param] = group
+	}
+	for param, group := range grouped {
+		values := group.values
+		separator := group.join
+		if separator == "" {
+			separator = ","
+		} else if separator == "concat" {
+			separator = ""
+		}
+		if existing := params[param]; existing != "" {
+			values = append(strings.Split(existing, separator), values...)
+		}
+		params[param] = dedupeJoin(values, separator)
 	}
 }
 
@@ -160,7 +172,7 @@ func cloneMap(source map[string]string) map[string]string {
 	return result
 }
 
-func dedupeJoin(values []string) string {
+func dedupeJoin(values []string, separator string) string {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))
 	for _, value := range values {
@@ -174,5 +186,5 @@ func dedupeJoin(values []string) string {
 		result = append(result, value)
 	}
 	sort.Strings(result)
-	return strings.Join(result, ",")
+	return strings.Join(result, separator)
 }

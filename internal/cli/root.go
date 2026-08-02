@@ -17,6 +17,7 @@ import (
 	"charm.land/huh/v2"
 	"github.com/spf13/cobra"
 
+	searchapi "srch/internal/api"
 	"srch/internal/app"
 	"srch/internal/domain"
 	"srch/internal/download"
@@ -619,32 +620,26 @@ func newMediaCommand(environment *app.Environment) *cobra.Command {
 }
 
 func newAPICommand(environment *app.Environment) *cobra.Command {
-	adapters := map[string]string{
-		"musicbrainz":      "https://musicbrainz.org/ws/2/artist/?fmt=json&query=",
-		"internet-archive": "https://archive.org/advancedsearch.php?output=json&q=",
-		"open-library":     "https://openlibrary.org/search.json?q=",
-		"crossref":         "https://api.crossref.org/works?query=",
-		"arxiv":            "https://export.arxiv.org/api/query?search_query=all:",
-		"theaudiodb":       "https://www.theaudiodb.com/api/v1/json/123/search.php?s=",
-	}
+	var searchType string
 	command := &cobra.Command{Use: "api <adapter> <query>", Short: "Query a supported structured API", Args: cobra.MinimumNArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
-		base, ok := adapters[args[0]]
+		adapter, ok := searchapi.Lookup(args[0])
 		if !ok {
 			return fmt.Errorf("unknown API adapter %q", args[0])
 		}
-		rawURL := base + url.QueryEscape(strings.Join(args[1:], " "))
-		response, err := fetch.Get(cmd.Context(), rawURL, fetch.Options{Timeout: 30 * time.Second, MaxBytes: 20 << 20})
+		if searchType == "" {
+			searchType = adapter.Types[0].ID
+		}
+		result, err := searchapi.Search(cmd.Context(), adapter.ID, searchType, strings.Join(args[1:], " "))
 		if err != nil {
 			return err
 		}
-		body, err := fetch.Format(response, "json")
-		if err != nil {
-			return err
-		}
-		_, err = cmd.OutOrStdout().Write(append(body, '\n'))
+		_, err = cmd.OutOrStdout().Write(append(result.Raw, '\n'))
 		return err
 	}}
-	command.ValidArgs = []string{"musicbrainz", "internet-archive", "open-library", "crossref", "arxiv", "theaudiodb"}
+	for _, adapter := range searchapi.Adapters() {
+		command.ValidArgs = append(command.ValidArgs, adapter.ID)
+	}
+	command.Flags().StringVar(&searchType, "type", "", "adapter-specific search type (defaults to the first supported type)")
 	return command
 }
 

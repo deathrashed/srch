@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	lipgloss "charm.land/lipgloss/v2"
+	searchapi "srch/internal/api"
 )
 
 type styles struct {
@@ -27,7 +28,7 @@ func newStyles(dark bool) styles {
 		compact: base.Foreground(border).Bold(true).Align(lipgloss.Center), title: base.Foreground(border).Bold(true),
 		section: base.Foreground(muted).Bold(true), panel: base.Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#4A4655")).Padding(0, 1),
 		input: base.Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#4A4655")).Padding(0, 1), inputFocused: base.Border(lipgloss.RoundedBorder()).BorderForeground(hot).Padding(0, 1),
-		tab: base.Foreground(muted).Padding(0, 1), active: base.Foreground(lipgloss.Color("#F8F5FF")).Background(accent).Bold(true).Padding(0, 1), focused: base.Foreground(hot).Bold(true),
+		tab: base.Foreground(muted).Border(lipgloss.NormalBorder(), true, true, false, true).BorderForeground(lipgloss.Color("#4A4655")).Padding(0, 1), active: base.Foreground(lipgloss.Color("#F8F5FF")).Border(lipgloss.NormalBorder(), true, true, false, true).BorderForeground(accent).Bold(true).Padding(0, 1), focused: base.Foreground(hot).Bold(true),
 		selected: base.Foreground(accent).Bold(true).Padding(0, 1), selectedFocused: base.Foreground(lipgloss.Color("#17141F")).Background(hot).Bold(true).Padding(0, 1),
 		muted: base.Foreground(muted), status: base.Foreground(muted).PaddingTop(1), key: base.Foreground(border).Bold(true),
 		success: base.Foreground(lipgloss.Color("#50FA7B")), warning: base.Foreground(lipgloss.Color("#F1FA8C")),
@@ -54,46 +55,58 @@ func (m Model) render() (string, []hitRegion) {
 	modeLine, modeHits := m.renderModeTabs(s, left, modeY)
 	lines = append(lines, modeLine)
 	hits = append(hits, modeHits...)
-	bodyY := modeY + 1
+	bodyY := modeY + lipgloss.Height(modeLine)
 	var body string
 	var bodyHits []hitRegion
-	switch m.overlay {
-	case overlayPalette:
-		body, bodyHits = m.renderPalette(s, left, bodyY)
-	case overlaySettings:
-		body, bodyHits = m.renderSettings(s, left, bodyY)
-	case overlayHelp:
-		body = m.renderHelp(s)
-	case overlayDetails:
-		body = m.renderDoctor(s)
-	default:
-		switch m.mode {
-		case ModeSearch:
-			body, bodyHits = m.renderSearch(s, left, bodyY)
-		case ModeReader:
-			body = m.renderReader(s)
-		case ModeDownloader:
-			body = m.renderDownloader(s)
-		case ModeAPI:
-			body = m.renderAPI(s)
-		case ModeHistory:
-			body = m.renderHistory(s)
-		}
+	switch m.mode {
+	case ModeSearch:
+		body, bodyHits = m.renderSearch(s, left, bodyY)
+	case ModeReader:
+		body, bodyHits = m.renderReader(s, left, bodyY)
+	case ModeDownloader:
+		body, bodyHits = m.renderDownloader(s, left, bodyY)
+	case ModeAPI:
+		body, bodyHits = m.renderAPI(s, left, bodyY)
+	case ModeHistory:
+		body, bodyHits = m.renderHistory(s, left, bodyY)
 	}
 	lines = append(lines, body)
 	hits = append(hits, bodyHits...)
-	content := strings.Join(lines, "\n")
-	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, s.base.Width(width).Render(content)), hits
+	content := lipgloss.PlaceHorizontal(m.width, lipgloss.Center, s.base.Width(width).Render(strings.Join(lines, "\n")))
+	if m.overlay == overlayNone {
+		return content, hits
+	}
+	panel, overlayHits := m.renderOverlay(s)
+	panelX := max(0, (m.width-lipgloss.Width(panel))/2)
+	panelY := max(1, (min(m.height, lipgloss.Height(content))-lipgloss.Height(panel))/2)
+	panel, overlayHits = m.renderOverlayAt(s, panelX, panelY)
+	composed := lipgloss.NewCompositor(
+		lipgloss.NewLayer(content).X(0).Y(0).Z(0),
+		lipgloss.NewLayer(panel).X(panelX).Y(panelY).Z(1),
+	).Render()
+	return composed, overlayHits
+}
+
+func (m Model) renderOverlay(s styles) (string, []hitRegion) { return m.renderOverlayAt(s, 0, 0) }
+
+func (m Model) renderOverlayAt(s styles, left, y int) (string, []hitRegion) {
+	switch m.overlay {
+	case overlayPicker:
+		return m.renderPicker(s, left, y)
+	case overlaySettings:
+		return m.renderSettings(s, left, y)
+	case overlayHelp:
+		return m.renderHelp(s), nil
+	case overlayDetails:
+		return m.renderDoctor(s), nil
+	default:
+		return "", nil
+	}
 }
 
 func (m Model) renderHeader(s styles) string {
 	subtitles := []string{"SEARCH  •  FIND  •  OPEN", "READER  •  FETCH  •  READ", "DOWNLOADER  •  SAVE  •  MONITOR", "API  •  QUERY  •  INSPECT", "HISTORY  •  REVISIT  •  REUSE"}
 	subtitle := subtitles[m.mode]
-	if m.overlay == overlaySettings {
-		subtitle = "SETTINGS  •  PREFERENCES"
-	} else if m.overlay == overlayPalette {
-		subtitle = "COMMANDS  •  NAVIGATE  •  ACT"
-	}
 	if m.width < 88 || m.height < 25 || m.env.Config.HeaderMode == "compact" {
 		return s.compact.Width(m.contentWidth()).Render("SRCH  ·  " + subtitle)
 	}
@@ -113,17 +126,14 @@ func (m Model) renderModeTabs(s styles, left, y int) (string, []hitRegion) {
 			parts[i] = s.tab.Render(label)
 		}
 		plainWidth += lipgloss.Width(parts[i])
-		if i > 0 {
-			plainWidth++
-		}
 	}
 	start := left + max(0, (m.contentWidth()-plainWidth)/2)
 	cursor := start
 	for i, part := range parts {
-		hits = append(hits, hitRegion{x: cursor, y: y, w: lipgloss.Width(part), action: "mode", index: i})
-		cursor += lipgloss.Width(part) + 1
+		hits = append(hits, hitRegion{x: cursor, y: y + 1, w: lipgloss.Width(part), action: "mode", index: i})
+		cursor += lipgloss.Width(part)
 	}
-	return lipgloss.PlaceHorizontal(m.contentWidth(), lipgloss.Center, strings.Join(parts, " ")), hits
+	return lipgloss.PlaceHorizontal(m.contentWidth(), lipgloss.Center, lipgloss.JoinHorizontal(lipgloss.Bottom, parts...)), hits
 }
 
 func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
@@ -158,8 +168,9 @@ func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 		for i, t := range active.Targets {
 			names[i] = t.Name
 		}
-		target, _ := selectorRow("Target", names, m.targetIndex, m.focusIndex == controlIndex, s, left, y, m.contentWidth(), "")
+		target, targetHits := selectorRow("Target", names, m.targetIndex, m.focusIndex == controlIndex, s, left, y, m.contentWidth(), "target")
 		rows = append(rows, target)
+		hits = append(hits, targetHits...)
 		y++
 		controlIndex++
 	}
@@ -180,8 +191,9 @@ func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 					selected = index + 1
 				}
 			}
-			row, _ := selectorRow(group.Name, names, selected, m.focusIndex == controlIndex, s, left, y, m.contentWidth(), "")
+			row, filterHits := selectorRow(group.Name, names, selected, m.focusIndex == controlIndex, s, left, y, m.contentWidth(), "filter:"+group.ID)
 			rows = append(rows, row)
+			hits = append(hits, filterHits...)
 			y++
 			controlIndex++
 		}
@@ -191,15 +203,29 @@ func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 		for _, p := range presets {
 			names = append(names, p.Name)
 		}
-		preset, _ := selectorRow("Preset", names, m.presetIndex, m.focusIndex == controlIndex, s, left, y, m.contentWidth(), "")
+		preset, presetHits := selectorRow("Preset", names, m.presetIndex, m.focusIndex == controlIndex, s, left, y, m.contentWidth(), "preset")
 		rows = append(rows, preset)
+		hits = append(hits, presetHits...)
 		y++
 		controlIndex++
 	}
 	if target != nil {
 		for _, field := range target.Fields {
-			rows = append(rows, s.muted.Render(field.Name+": ")+field.Placeholder)
+			input := m.fieldInputs[field.ID]
+			marker := "  "
+			labelStyle := s.muted
+			valueStyle := s.selected
+			if m.focusIndex == controlIndex {
+				marker = s.focused.Render("› ")
+				labelStyle = s.focused
+				valueStyle = s.selectedFocused
+			}
+			valueWidth := max(18, min(48, m.contentWidth()-30))
+			row := marker + labelStyle.Width(11).Render(field.Name) + "  " + valueStyle.Width(valueWidth).Render(input.View())
+			rows = append(rows, row)
+			hits = append(hits, hitRegion{x: left + 15, y: y, w: valueWidth, action: "field:" + field.ID})
 			y++
+			controlIndex++
 		}
 	}
 	rows = append(rows, "", sectionLine(s, "QUERY", m.contentWidth()))
@@ -209,6 +235,7 @@ func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 	}
 	input := inputStyle.Width(max(20, m.contentWidth()-2)).Render(m.input.View())
 	rows = append(rows, input)
+	hits = append(hits, hitRegion{x: left, y: y + 2, w: m.contentWidth(), action: "query"})
 	if m.status != "" {
 		status := m.status
 		if m.busy {
@@ -216,7 +243,7 @@ func (m Model) renderSearch(s styles, left, y int) (string, []hitRegion) {
 		}
 		rows = append(rows, s.status.Render(status))
 	}
-	rows = append(rows, "", s.muted.Render(strings.Repeat("─", m.contentWidth())), footer(s, "tab", "next field", "←/→", "change", "/", "query", "enter", "open", "ctrl+p", "commands", "ctrl+,", "settings"))
+	rows = append(rows, "", s.muted.Render(strings.Repeat("─", m.contentWidth())), footerBindings(s, searchFooterBindings()))
 	return strings.Join(rows, "\n"), hits
 }
 
@@ -276,23 +303,182 @@ func categoryName(id string) string {
 		return "Video"
 	case "web":
 		return "Web"
+	case "extensions":
+		return "Extensions"
+	case "reference":
+		return "Reference"
+	case "privacy":
+		return "Privacy"
+	case "health":
+		return "Health"
 	default:
-		return id
+		if id == "" {
+			return ""
+		}
+		return strings.ToUpper(id[:1]) + id[1:]
 	}
 }
-func (m Model) renderReader(s styles) string {
-	return taskView(s, "Reader", "Enter a URL. Built-in extraction uses Defuddle and renders Markdown with Glamour.", m.input.View(), m.content, m.status, m.busy, m.spinner.View())
+func (m Model) renderReader(s styles, left, y int) (string, []hitRegion) {
+	parts := []string{s.title.Render("Reader"), s.muted.Render("Fetch a page, extract the article, and read it without leaving the terminal."), s.input.Render(m.input.View())}
+	inputY := y + lipgloss.Height(parts[0]) + 1 + lipgloss.Height(parts[1]) + 1
+	hits := []hitRegion{{x: left, y: inputY, w: m.contentWidth(), action: "reader-input"}}
+	if m.content != "" {
+		progress := fmt.Sprintf("%3.0f%%", m.viewport.ScrollPercent()*100)
+		parts = append(parts, s.panel.Width(m.contentWidth()-4).Render(m.viewport.View()), s.muted.Render("↑/↓ scroll  pgup/pgdn page  g/G ends  / edit URL")+"  "+s.key.Render(progress))
+	}
+	if m.status != "" {
+		status := m.status
+		if m.busy {
+			status = m.spinner.View() + " " + status
+		}
+		parts = append(parts, s.status.Render(status))
+	}
+	parts = append(parts, footerBindings(s, []keyBinding{{label: "enter", help: "fetch"}, {label: "↑/↓ pgup/pgdn", help: "scroll"}, keyMode, keyPalette, keySettings}))
+	return strings.Join(parts, "\n\n"), hits
 }
-func (m Model) renderDownloader(s styles) string {
+func (m Model) renderDownloader(s styles, left, y int) (string, []hitRegion) {
 	kinds := []string{"Direct", "Media (yt-dlp)"}
-	return taskView(s, "Downloader", "Mode: "+s.selected.Render(kinds[m.downloadKind])+"   ←/→ changes mode\nDownloads save to "+m.env.Config.DownloadDir, m.input.View(), m.content, m.status, m.busy, m.spinner.View())
-}
-func (m Model) renderAPI(s styles) string {
-	engine := "No API adapters"
-	if engines := m.apiEngines(); len(engines) > 0 {
-		engine = engines[m.apiEngineIndex%len(engines)].Name
+	parts := []string{s.title.Render("Downloader"), "Mode: " + s.selected.Render(kinds[m.downloadKind]) + "   ←/→ changes mode\nDownloads save to " + m.env.Config.DownloadDir, s.input.Render(m.input.View())}
+	modeY := y + lipgloss.Height(parts[0]) + 1
+	inputY := modeY + lipgloss.Height(parts[1]) + 1
+	hits := []hitRegion{{x: left, y: modeY, w: m.contentWidth(), action: "download-kind"}, {x: left, y: inputY, w: m.contentWidth(), action: "download-input"}}
+	if m.content != "" {
+		parts = append(parts, s.panel.Render(m.content))
 	}
-	return taskView(s, "API", "Engine: "+s.selected.Render(engine)+"   ←/→ changes adapter\nCompile an API-backed request and inspect its URL or returned content.", m.input.View(), m.content, m.status, m.busy, m.spinner.View())
+	if m.status != "" {
+		status := m.status
+		if m.busy {
+			status = m.spinner.View() + " " + status
+		}
+		parts = append(parts, s.status.Render(status))
+	}
+	button := s.active.Render("Download")
+	buttonX := left + max(0, (m.contentWidth()-lipgloss.Width(button))/2)
+	buttonY := y
+	for _, part := range parts {
+		buttonY += lipgloss.Height(part) + 1
+	}
+	parts = append(parts, lipgloss.PlaceHorizontal(m.contentWidth(), lipgloss.Center, button), footerBindings(s, []keyBinding{keyRun, keyChange, keyMode, keyPalette, keySettings}))
+	hits = append(hits, hitRegion{x: buttonX, y: buttonY + 1, w: lipgloss.Width(button), action: "download-run"})
+	return strings.Join(parts, "\n\n"), hits
+}
+func (m Model) renderAPI(s styles, left, y int) (string, []hitRegion) {
+	adapter := m.currentAPIAdapter()
+	searchType := m.currentAPIType()
+	rows := []string{}
+	hits := []hitRegion{}
+	cursorY := y
+	appendRow := func(row string) {
+		rows = append(rows, row)
+		cursorY += max(1, lipgloss.Height(row))
+	}
+	appendRow(s.title.Render("Structured API Search"))
+	if m.height >= 28 {
+		appendRow(s.muted.Width(m.contentWidth()).Render("Choose a documented data source, narrow what it searches, then run a live query."))
+	}
+	appendRow(sectionLine(s, "1 SOURCE", m.contentWidth()))
+	adapters := searchapi.Adapters()
+	sourceNames := make([]string, len(adapters))
+	for i, candidate := range adapters {
+		sourceNames[i] = candidate.Name
+	}
+	source, sourceHits := selectorRow("Source", sourceNames, m.api.sourceIndex, m.api.focusIndex == 0, s, left, cursorY, m.contentWidth(), "api-source")
+	appendRow(source)
+	hits = append(hits, sourceHits...)
+	typeNames := make([]string, len(adapter.Types))
+	for i, candidate := range adapter.Types {
+		typeNames[i] = candidate.Name
+	}
+	typeRow, typeHits := selectorRow("Search type", typeNames, m.api.typeIndex, m.api.focusIndex == 1, s, left, cursorY, m.contentWidth(), "api-type")
+	appendRow(typeRow)
+	hits = append(hits, typeHits...)
+	availability := adapter.Confidence + " · " + adapter.Auth
+	if m.height >= 28 {
+		appendRow(s.muted.Width(m.contentWidth()).Render(adapter.Description))
+		appendRow(s.muted.Width(m.contentWidth()).Render(searchType.Description + " · " + availability))
+	} else {
+		appendRow(s.muted.Width(m.contentWidth()).Render(adapter.Name + " · " + searchType.Name + " · " + availability))
+	}
+	appendRow(sectionLine(s, "2 QUERY", m.contentWidth()))
+	inputStyle := s.input
+	if m.api.focusIndex == 2 {
+		inputStyle = s.inputFocused
+	}
+	hits = append(hits, hitRegion{x: left, y: cursorY, w: m.contentWidth(), action: "api-query"})
+	appendRow(inputStyle.Width(max(20, m.contentWidth()-2)).Render(m.input.View()))
+	appendRow(sectionLine(s, "3 ACTIONS", m.contentWidth()))
+	actions := make([]string, len(apiActionNames))
+	actionWidth := 0
+	for i, name := range apiActionNames {
+		style := s.tab
+		if i == m.api.actionIndex {
+			style = s.active
+		}
+		actions[i] = style.Render(name)
+		actionWidth += lipgloss.Width(actions[i])
+	}
+	chunks := [][]string{actions}
+	if actionWidth > m.contentWidth() {
+		middle := (len(actions) + 1) / 2
+		chunks = [][]string{actions[:middle], actions[middle:]}
+	}
+	actionIndex := 0
+	for _, chunk := range chunks {
+		line := lipgloss.JoinHorizontal(lipgloss.Center, chunk...)
+		start := left + max(0, (m.contentWidth()-lipgloss.Width(line))/2)
+		cursor := start
+		for _, action := range chunk {
+			hits = append(hits, hitRegion{x: cursor, y: cursorY + 1, w: lipgloss.Width(action), action: "api-action", index: actionIndex})
+			cursor += lipgloss.Width(action)
+			actionIndex++
+		}
+		appendRow(lipgloss.PlaceHorizontal(m.contentWidth(), lipgloss.Center, line))
+	}
+	if m.status != "" {
+		status := m.status
+		if m.busy {
+			status = m.spinner.View() + " " + status
+		}
+		appendRow(s.status.Render(status))
+	}
+	if m.api.phase == "loading" {
+		appendRow(s.muted.Width(m.contentWidth()).Render("The request is running in the background. The interface remains available."))
+	}
+	if m.api.phase == "success" {
+		appendRow(sectionLine(s, "RESULTS", m.contentWidth()))
+		if len(m.api.result.Items) == 0 {
+			appendRow(s.muted.Render("No matching results. Try a broader query or another search type."))
+		} else {
+			visibleLimit := 8
+			if m.height < 34 {
+				visibleLimit = 3
+			}
+			start := 0
+			if m.api.selected >= visibleLimit {
+				start = m.api.selected - visibleLimit + 1
+			}
+			end := min(start+visibleLimit, len(m.api.result.Items))
+			for i := start; i < end; i++ {
+				item := m.api.result.Items[i]
+				prefix := "  "
+				style := s.base
+				if i == m.api.selected {
+					prefix = "› "
+					style = s.focused
+				}
+				line := style.Render(prefix + item.Title)
+				if item.Subtitle != "" {
+					line += "  " + s.muted.Render(item.Subtitle)
+				}
+				hits = append(hits, hitRegion{x: left, y: cursorY, w: min(m.contentWidth(), lipgloss.Width(line)), action: "api-result", index: i})
+				appendRow(line)
+			}
+			appendRow(s.panel.Width(m.contentWidth() - 4).Render(m.viewport.View()))
+		}
+	}
+	appendRow(s.muted.Render(strings.Repeat("─", m.contentWidth())))
+	appendRow(footerBindings(s, apiFooterBindings(m)))
+	return strings.Join(rows, "\n"), hits
 }
 func taskView(s styles, title, description, input, content, status string, busy bool, spin string) string {
 	parts := []string{s.title.Render(title), s.muted.Render(description), s.input.Render(input)}
@@ -305,16 +491,18 @@ func taskView(s styles, title, description, input, content, status string, busy 
 		}
 		parts = append(parts, s.status.Render(status))
 	}
-	parts = append(parts, footer(s, "enter", "run", "alt+←/→", "mode", "ctrl+p", "commands", "ctrl+,", "settings"))
+	parts = append(parts, footerBindings(s, []keyBinding{keyRun, keyChange, keyMode, keyPalette, keySettings}))
 	return strings.Join(parts, "\n\n")
 }
 
-func (m Model) renderHistory(s styles) string {
+func (m Model) renderHistory(s styles, left, y int) (string, []hitRegion) {
 	entries, err := m.env.History.List()
 	if err != nil {
-		return s.warning.Render(err.Error())
+		return s.warning.Render(err.Error()), nil
 	}
 	lines := []string{s.title.Render("History")}
+	hits := []hitRegion{}
+	rowY := y + lipgloss.Height(lines[0]) + 1
 	if len(entries) == 0 {
 		lines = append(lines, "", s.muted.Render("No searches recorded yet."))
 	} else {
@@ -326,33 +514,49 @@ func (m Model) renderHistory(s styles) string {
 				style = s.focused
 			}
 			lines = append(lines, style.Render(prefix+entry.CreatedAt.Local().Format("2006-01-02 15:04")+"  "+entry.Query))
+			hits = append(hits, hitRegion{x: left, y: rowY, w: m.contentWidth(), action: "history", index: i})
+			rowY++
 		}
 	}
 	lines = append(lines, "", footer(s, "↑/↓", "select", "enter", "rerun", "d", "delete", "ctrl+p", "commands"))
-	return strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), hits
 }
 
-func (m Model) renderPalette(s styles, left, y int) (string, []hitRegion) {
-	items := paletteItems()
-	lines := []string{s.title.Render("Command Palette")}
+func (m Model) renderPicker(s styles, left, y int) (string, []hitRegion) {
+	items := m.picker.filtered()
+	lines := []string{s.title.Render(m.picker.title), s.inputFocused.Width(56).Render(m.picker.input.View()), ""}
 	hits := []hitRegion{}
-	for i, item := range items {
+	start := 0
+	if m.picker.selected >= 10 {
+		start = m.picker.selected - 9
+	}
+	end := min(start+10, len(items))
+	for i := start; i < end; i++ {
+		item := items[i]
 		style := s.tab
 		prefix := "  "
-		if i == m.paletteIndex {
+		if i == m.picker.selected {
 			style = s.focused
 			prefix = "› "
 		}
-		line := style.Render(prefix + item)
+		line := style.UnsetBorderStyle().UnsetPadding().Render(prefix + item.name)
+		if item.description != "" && item.description != strings.ToLower(item.name) {
+			line += "  " + s.muted.Render(item.description)
+		}
 		lines = append(lines, line)
-		hits = append(hits, hitRegion{x: left + 2, y: y + 2 + i, w: lipgloss.Width(line), action: "palette", index: i})
+		hits = append(hits, hitRegion{x: left + 2, y: y + 4 + i - start, w: lipgloss.Width(line), action: "picker", index: i})
 	}
-	lines = append(lines, "", footer(s, "↑/↓", "choose", "enter", "run", "esc", "close"))
-	return s.panel.Width(max(40, min(70, m.contentWidth()-2))).Render(strings.Join(lines, "\n")), hits
+	if len(items) == 0 {
+		lines = append(lines, s.muted.Render("No matching items"))
+	} else if len(items) > 10 {
+		lines = append(lines, s.muted.Render(fmt.Sprintf("Showing %d–%d of %d", start+1, end, len(items))))
+	}
+	lines = append(lines, "", footer(s, "type", "filter", "↑/↓", "choose", "enter", "select", "esc", "close"))
+	return s.panel.Width(max(48, min(70, m.contentWidth()-4))).Render(strings.Join(lines, "\n")), hits
 }
 
 func (m Model) renderSettings(s styles, left, y int) (string, []hitRegion) {
-	rows := [][2]string{{"Default category", m.settings.draft.DefaultCategory}, {"Search input", m.settings.draft.InputPosition}, {"Header", m.settings.draft.HeaderMode}, {"Density", m.settings.draft.Density}, {"Theme", m.settings.draft.Theme}, {"Motion", m.settings.draft.Motion}, {"Store history", yesNo(m.settings.draft.HistoryEnabled)}, {"Mouse", yesNo(m.settings.draft.Mouse)}}
+	rows := [][2]string{{"Default category", categoryName(m.settings.draft.DefaultCategory)}, {"Search input", categoryName(m.settings.draft.InputPosition)}, {"Header", categoryName(m.settings.draft.HeaderMode)}, {"Density", categoryName(m.settings.draft.Density)}, {"Theme", categoryName(m.settings.draft.Theme)}, {"Motion", categoryName(m.settings.draft.Motion)}, {"Store history", yesNo(m.settings.draft.HistoryEnabled)}, {"Mouse", yesNo(m.settings.draft.Mouse)}}
 	lines := []string{s.title.Render("Settings"), s.muted.Render("Draft values · Ctrl+S applies · Esc discards"), ""}
 	hits := []hitRegion{}
 	for i, row := range rows {
@@ -378,7 +582,27 @@ func yesNo(value bool) string {
 }
 
 func (m Model) renderHelp(s styles) string {
-	return s.panel.Render(s.title.Render("Manual & Help") + "\n\n" + "Alt+Left/Right or Ctrl+1…5 switches product modes.\nTab moves through Search controls; arrows change the focused value.\nCtrl+P opens commands. Ctrl+, opens transactional Settings.\nEnter runs the current mode. Esc closes the top overlay.")
+	sections := []string{
+		s.title.Render("SRCH Manual & Help"),
+		s.muted.Render("Navigate every workspace with one shared key map. Visible commands change with the active workspace."),
+		sectionLine(s, "GLOBAL", 64),
+		footerBindings(s, globalHelpBindings()),
+		sectionLine(s, strings.ToUpper(modeNames[m.mode]), 64),
+		footerBindings(s, modeHelpBindings(m.mode)),
+	}
+	switch m.mode {
+	case ModeSearch:
+		sections = append(sections, "Tab / Shift+Tab moves through source, target, refinements, presets, and query.\nEnter on any selector opens fuzzy selection. Arrow keys cycle values.\n/ focuses the query. Enter opens the search. Ctrl+Y copies its URL.")
+	case ModeReader:
+		sections = append(sections, "Enter fetches the URL. Once loaded, use arrows, PgUp/PgDn, g/G, or the mouse wheel.\nPress / or i to edit the URL; Esc clears the article and returns to input.")
+	case ModeDownloader:
+		sections = append(sections, "Left/Right selects Direct or Media. Enter starts a contained background job.\nyt-dlp output is captured and summarized here; it never takes over the terminal.")
+	case ModeAPI:
+		sections = append(sections, "Choose Source → Search type → Query → Action. Run executes the documented API in the background and normalizes results.\nOpen, Copy URL, Export JSON, Send to Reader, and Raw JSON act on the selected result. API keys are not required for the bundled sources.")
+	case ModeHistory:
+		sections = append(sections, "Up/Down selects a prior search. Enter restores it. D deletes the selected entry.")
+	}
+	return s.panel.Width(max(54, min(74, m.contentWidth()-4))).Render(strings.Join(sections, "\n\n"))
 }
 func (m Model) renderDoctor(s styles) string {
 	tools := []string{"defuddle", "glow", "bat", "curl", "aria2c", "yt-dlp", "ffmpeg"}

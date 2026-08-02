@@ -140,3 +140,21 @@ func TestBingDoesNotReceiveGoogleImageBindings(t *testing.T) {
 		t.Fatalf("provider-specific parameter leaked into Bing: %s", got)
 	}
 }
+
+func TestBindingsCanConcatenateSharedParameters(t *testing.T) {
+	engine := domain.Engine{
+		Name: "Images",
+		URL:  domain.URLSpec{Base: "https://example.com/search", Placement: domain.PlacementQuery, QueryParam: "q"},
+		Bindings: map[string]domain.ModifierBinding{
+			"size":  {Param: "qft", Join: "concat", Values: map[string]string{"large": "+size-large"}},
+			"color": {Param: "qft", Join: "concat", Values: map[string]string{"clear": "+transparent"}},
+		},
+	}
+	got, err := query.BuildTarget(engine, nil, nil, domain.SearchRequest{Query: "logo", Modifiers: domain.Modifiers{Values: map[string]string{"size": "large", "color": "clear"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "qft=%2Bsize-large%2Btransparent") && !strings.Contains(got, "qft=%2Btransparent%2Bsize-large") {
+		t.Fatalf("shared qft filters were not concatenated: %s", got)
+	}
+}

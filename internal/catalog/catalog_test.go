@@ -62,3 +62,29 @@ func TestLegacyMetalAlbumResolvesCanonicalTarget(t *testing.T) {
 		t.Fatalf("unexpected target: %#v", resolved)
 	}
 }
+
+func TestRefinedEngineTargetsAreResolvable(t *testing.T) {
+	cat, err := catalog.Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := []struct {
+		engine string
+		target string
+	}{
+		{engine: "bing-images", target: "image"},
+		{engine: "wikimedia-commons", target: "audio"},
+		{engine: "wikimedia-commons", target: "video"},
+		{engine: "musicbrainz", target: "release"},
+		{engine: "musicbrainz", target: "recording"},
+	}
+	for _, check := range checks {
+		resolved, err := cat.ResolveTarget(domain.SearchTarget{EngineID: check.engine, TargetID: check.target})
+		if err != nil {
+			t.Fatalf("resolve %s/%s: %v", check.engine, check.target, err)
+		}
+		if resolved.Target.ID != check.target {
+			t.Fatalf("resolve %s/%s returned target %q", check.engine, check.target, resolved.Target.ID)
+		}
+	}
+}
