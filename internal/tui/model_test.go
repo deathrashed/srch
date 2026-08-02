@@ -205,6 +205,18 @@ func TestReaderViewportScrollsAndReturnsToInput(t *testing.T) {
 	}
 }
 
+func TestReaderEscapeClearsArticleEvenWhileURLInputIsFocused(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.setMode(int(ModeReader))
+	model.content = "article"
+	model.viewport.SetContent(model.content)
+	model.input.Focus()
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if model.content != "" || !model.input.Focused() {
+		t.Fatalf("Reader escape left content=%q focused=%v", model.content, model.input.Focused())
+	}
+}
+
 func TestFuzzyEnginePickerSelectsAndRestoresFocus(t *testing.T) {
 	model := New(testEnvironment(t))
 	model.width, model.height = 100, 30
@@ -223,6 +235,56 @@ func TestFuzzyEnginePickerSelectsAndRestoresFocus(t *testing.T) {
 	if model.overlay != overlayNone || model.focusIndex != 1 || model.currentEngine().ID != "wikimedia-commons" {
 		t.Fatalf("picker selection not applied/restored: overlay=%v focus=%d engine=%s", model.overlay, model.focusIndex, model.currentEngine().ID)
 	}
+}
+
+func TestPickerKeepsSelectionsBeyondFirstPageVisible(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.width, model.height = 110, 34
+	model.categoryIndex = categoryIndex("web")
+	model.openSourcePicker(pickerEngines)
+	model.picker.selected = 12
+	items := model.picker.filtered()
+	view, hits := model.render()
+	if !strings.Contains(view, items[12].name) || !strings.Contains(view, "of ") {
+		t.Fatalf("picker did not window selected item %q", items[12].name)
+	}
+	for _, hit := range hits {
+		if hit.action == "picker" && hit.index == 12 {
+			updated, _ := model.handleMouse(hit.x, hit.y)
+			model = updated.(Model)
+			if model.overlay != overlayNone || model.currentEngine().ID != items[12].value {
+				t.Fatalf("mouse did not choose windowed item: overlay=%v engine=%q want=%q", model.overlay, model.currentEngine().ID, items[12].value)
+			}
+			return
+		}
+	}
+	t.Fatal("windowed picker selection has no mouse target")
+}
+
+func TestPickerHitRowsMatchRenderedRows(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.width, model.height = 110, 34
+	model.categoryIndex = categoryIndex("web")
+	model.openSourcePicker(pickerEngines)
+	items := model.picker.filtered()
+	const panelY = 11
+	panel, hits := model.renderPicker(newStyles(true), 7, panelY)
+	lines := strings.Split(panel, "\n")
+	for _, hit := range hits {
+		if hit.action != "picker" || hit.index != 0 {
+			continue
+		}
+		for row, line := range lines {
+			if strings.Contains(line, items[0].name) {
+				if hit.y != panelY+row {
+					t.Fatalf("first picker hit row=%d, rendered row=%d", hit.y, panelY+row)
+				}
+				return
+			}
+		}
+		t.Fatalf("first picker item %q not rendered", items[0].name)
+	}
+	t.Fatal("first picker item has no hit region")
 }
 
 func TestTargetAndRefinementRowsUseReusablePickers(t *testing.T) {
@@ -323,7 +385,7 @@ func TestMediaDownloadCapturesYTDLPOutput(t *testing.T) {
 	runner := &captureRunner{output: []byte("download: 50% 2MiB/s ETA 00:10\ndownload:100% 4MiB/s ETA 00:00\n")}
 	env.Platform.Runner = runner
 	model := New(env)
-	message := model.mediaDownloadCmd("https://example.com/watch?v=1")().(operationMsg)
+	message := model.mediaDownloadCmd("https://example.com/watch?v=1", 1)().(operationMsg)
 	if runner.runCalled {
 		t.Fatal("media download inherited terminal stdio through Run")
 	}
@@ -375,7 +437,7 @@ func TestAPIGuidedWorkspaceAndStructuredResults(t *testing.T) {
 		Items:   []searchapi.Item{{Title: "Black Sabbath", Subtitle: "GB", URL: "https://example.test/result"}},
 		Raw:     []byte(`{"artists":[{"name":"Black Sabbath"}]}`),
 	}
-	model = updateModel(t, model, apiResultMsg{result: result})
+	model = updateModel(t, model, apiResultMsg{id: model.api.requestID, result: result})
 	view, _ = model.render()
 	if !strings.Contains(view, "Black Sabbath") || model.api.phase != "success" {
 		t.Fatalf("API result was not rendered: phase=%q", model.api.phase)
@@ -400,6 +462,74 @@ func TestAPIGuidedWorkspaceAndStructuredResults(t *testing.T) {
 	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if model.mode != ModeReader || model.input.Value() != "https://example.test/result" {
 		t.Fatalf("Send to Reader action failed: mode=%v input=%q", model.mode, model.input.Value())
+	}
+}
+
+func TestStaleAPIResultCannotReplaceNewSelection(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.setMode(int(ModeAPI))
+	model.input.SetValue("old query")
+	model.api.focusIndex = 2
+	updated, _ := model.runAPISearch()
+	model = updated.(Model)
+	requestID := model.api.requestID
+	model.api.focusIndex = 0
+	model.changeAPIFocused(1)
+	if model.api.requestID == requestID {
+		t.Fatal("source change did not invalidate active request")
+	}
+	stale := searchapi.Result{Adapter: searchapi.Adapters()[0], Items: []searchapi.Item{{Title: "stale"}}}
+	model = updateModel(t, model, apiResultMsg{id: requestID, result: stale})
+	if len(model.api.result.Items) != 0 || model.api.phase != "idle" {
+		t.Fatalf("stale result replaced state: %#v", model.api)
+	}
+}
+
+func TestStaleAPIResultCannotReplaceAnotherWorkspace(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.setMode(int(ModeAPI))
+	model.input.SetValue("old query")
+	updated, _ := model.runAPISearch()
+	model = updated.(Model)
+	requestID := model.api.requestID
+	model.setMode(int(ModeSearch))
+
+	stale := searchapi.Result{Adapter: searchapi.Adapters()[0], Items: []searchapi.Item{{Title: "stale"}}}
+	model = updateModel(t, model, apiResultMsg{id: requestID, result: stale})
+	if model.mode != ModeSearch || len(model.api.result.Items) != 0 || model.status != "" {
+		t.Fatalf("stale API result mutated another workspace: mode=%v status=%q result=%#v", model.mode, model.status, model.api.result)
+	}
+}
+
+func TestModeSwitchClearsBusyAfterInvalidatingOperation(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.setMode(int(ModeReader))
+	model.busy = true
+	model.status = "Fetching readable content"
+	model.setMode(int(ModeAPI))
+	if model.busy || model.status != "" {
+		t.Fatalf("mode switch retained stale activity: busy=%v status=%q", model.busy, model.status)
+	}
+}
+
+func TestAPIResetInvalidatesPendingResultOperation(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.setMode(int(ModeAPI))
+	model.operationID++
+	operationID := model.operationID
+	model.resetAPIResult()
+	model = updateModel(t, model, operationMsg{id: operationID, mode: ModeAPI, kind: "API result", text: "stale"})
+	if model.status != "" || model.content != "" {
+		t.Fatalf("stale API operation mutated reset state: status=%q content=%q", model.status, model.content)
+	}
+}
+
+func TestQuestionMarkTypesIntoFocusedInput(t *testing.T) {
+	model := New(testEnvironment(t))
+	model.input.Focus()
+	model = updateModel(t, model, tea.KeyPressMsg(tea.Key{Code: '?', Text: "?"}))
+	if model.overlay != overlayNone || model.input.Value() != "?" {
+		t.Fatalf("question mark did not reach focused input: overlay=%v value=%q", model.overlay, model.input.Value())
 	}
 }
 

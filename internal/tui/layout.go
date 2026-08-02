@@ -541,10 +541,11 @@ func (m Model) renderPicker(s styles, left, y int) (string, []hitRegion) {
 		}
 		line := style.UnsetBorderStyle().UnsetPadding().Render(prefix + item.name)
 		if item.description != "" && item.description != strings.ToLower(item.name) {
-			line += "  " + s.muted.Render(item.description)
+			descriptionWidth := max(12, min(40, m.contentWidth()-lipgloss.Width(prefix+item.name)-12))
+			line += "  " + s.muted.Render(truncateWidth(item.description, descriptionWidth))
 		}
 		lines = append(lines, line)
-		hits = append(hits, hitRegion{x: left + 2, y: y + 4 + i - start, w: lipgloss.Width(line), action: "picker", index: i})
+		hits = append(hits, hitRegion{x: left + 2, y: y + 6 + i - start, w: lipgloss.Width(line), action: "picker", index: i})
 	}
 	if len(items) == 0 {
 		lines = append(lines, s.muted.Render("No matching items"))
@@ -553,6 +554,20 @@ func (m Model) renderPicker(s styles, left, y int) (string, []hitRegion) {
 	}
 	lines = append(lines, "", footer(s, "type", "filter", "↑/↓", "choose", "enter", "select", "esc", "close"))
 	return s.panel.Width(max(48, min(70, m.contentWidth()-4))).Render(strings.Join(lines, "\n")), hits
+}
+
+func truncateWidth(value string, width int) string {
+	if lipgloss.Width(value) <= width {
+		return value
+	}
+	var result strings.Builder
+	for _, char := range value {
+		if lipgloss.Width(result.String()+string(char)+"…") > width {
+			break
+		}
+		result.WriteRune(char)
+	}
+	return result.String() + "…"
 }
 
 func (m Model) renderSettings(s styles, left, y int) (string, []hitRegion) {

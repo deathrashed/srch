@@ -56,6 +56,8 @@ type operationMsg struct {
 	text            string
 	err             error
 	preserveContent bool
+	id              uint64
+	mode            Mode
 }
 
 type apiResultMsg struct {
@@ -104,6 +106,7 @@ type Model struct {
 	fieldInputs  map[string]textinput.Model
 	picker       pickerState
 	returnFocus  int
+	operationID  uint64
 }
 
 type settingsState struct {
@@ -152,6 +155,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(value)
 		return m, cmd
 	case operationMsg:
+		if value.id != 0 && (value.id != m.operationID || value.mode != m.mode) {
+			return m, nil
+		}
 		m.busy = false
 		if value.err != nil {
 			m.status = value.kind + " failed: " + value.err.Error()
@@ -215,7 +221,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case matchesKey(key, keySettings):
 			m.openSettings()
 			return m, nil
-		case matchesKey(key, keyHelp):
+		case matchesKey(key, keyHelp) && !m.anyTextInputFocused():
 			m.returnFocus = m.currentModeFocus()
 			m.overlay = overlayHelp
 			m.input.Blur()
@@ -348,6 +354,8 @@ func (m Model) updateReader(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Enter a URL to read"
 			return m, nil
 		}
+		m.operationID++
+		operationID := m.operationID
 		m.busy, m.status = true, "Fetching readable content"
 		width := max(40, m.contentWidth()-6)
 		return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
@@ -355,10 +363,10 @@ func (m Model) updateReader(msg tea.Msg) (tea.Model, tea.Cmd) {
 			defer cancel()
 			markdown, err := reader.Extract(ctx, rawURL)
 			if err != nil {
-				return operationMsg{kind: "Reader", err: err}
+				return operationMsg{kind: "Reader", err: err, id: operationID, mode: ModeReader}
 			}
 			rendered, err := reader.Render(markdown, width, map[bool]string{true: "dark", false: "light"}[m.dark])
-			return operationMsg{kind: "Reader", text: rendered, err: err}
+			return operationMsg{kind: "Reader", text: rendered, err: err, id: operationID, mode: ModeReader}
 		})
 	}
 	var cmd tea.Cmd
@@ -384,16 +392,20 @@ func (m Model) updateDownloader(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.status = "Media downloads require yt-dlp"
 					return m, nil
 				}
+				m.operationID++
+				operationID := m.operationID
 				m.busy, m.status = true, "Running yt-dlp"
-				return m, tea.Batch(m.spinner.Tick, m.mediaDownloadCmd(rawURL))
+				return m, tea.Batch(m.spinner.Tick, m.mediaDownloadCmd(rawURL, operationID))
 			}
 			destination := filepath.Join(m.env.Config.DownloadDir, "download")
+			m.operationID++
+			operationID := m.operationID
 			m.busy, m.status = true, "Downloading"
 			return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 				defer cancel()
 				result, err := download.Direct(ctx, rawURL, download.Options{Destination: destination, Resume: true})
-				return operationMsg{kind: "Download", text: result.Path, err: err}
+				return operationMsg{kind: "Download", text: result.Path, err: err, id: operationID, mode: ModeDownloader}
 			})
 		}
 	}
@@ -402,10 +414,10 @@ func (m Model) updateDownloader(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m Model) mediaDownloadCmd(rawURL string) tea.Cmd {
+func (m Model) mediaDownloadCmd(rawURL string, operationID uint64) tea.Cmd {
 	return func() tea.Msg {
 		output, err := m.env.Platform.Runner.Output("yt-dlp", "--newline", "--progress-template", "download:%(progress._percent_str)s %(progress._speed_str)s ETA %(progress._eta_str)s", "-P", m.env.Config.DownloadDir, rawURL)
-		return operationMsg{kind: "Media download", text: tailOutput(string(output), 12), err: err}
+		return operationMsg{kind: "Media download", text: tailOutput(string(output), 12), err: err, id: operationID, mode: ModeDownloader}
 	}
 }
 
@@ -562,8 +574,10 @@ func (m Model) openAPIResult() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.busy, m.status = true, "Opening result"
+	m.operationID++
+	operationID := m.operationID
 	return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
-		return operationMsg{kind: "API result", err: m.env.Platform.OpenURL(rawURL, m.env.Config.DefaultBrowser), preserveContent: true}
+		return operationMsg{kind: "API result", err: m.env.Platform.OpenURL(rawURL, m.env.Config.DefaultBrowser), preserveContent: true, id: operationID, mode: ModeAPI}
 	})
 }
 
@@ -892,8 +906,10 @@ func (m *Model) setMode(index int) {
 		return
 	}
 	m.mode = Mode(index)
+	m.operationID++
+	m.api.requestID++
 	m.overlay = overlayNone
-	m.status, m.content = "", ""
+	m.status, m.content, m.busy = "", "", false
 	m.viewport.SetContent("")
 	m.input.SetValue("")
 	m.input.Focus()
@@ -970,8 +986,10 @@ func (m Model) executeSearch(copyOnly bool) (tea.Model, tea.Cmd) {
 		_ = m.env.History.Add(request)
 	}
 	m.busy, m.status = true, "Opening "+urls[0].Engine.Name
+	m.operationID++
+	operationID := m.operationID
 	return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
-		return operationMsg{kind: "Search", text: urls[0].URL, err: m.env.Platform.OpenURL(urls[0].URL, m.env.Config.DefaultBrowser)}
+		return operationMsg{kind: "Search", text: urls[0].URL, err: m.env.Platform.OpenURL(urls[0].URL, m.env.Config.DefaultBrowser), id: operationID, mode: ModeSearch}
 	})
 }
 
@@ -1098,6 +1116,7 @@ func (m *Model) changeAPIFocused(delta int) {
 }
 
 func (m *Model) resetAPIResult() {
+	m.operationID++
 	m.api.requestID++
 	m.api.phase = "idle"
 	m.api.result = searchapi.Result{}
@@ -1366,11 +1385,13 @@ func (m Model) handleMouse(x, y int) (tea.Model, tea.Cmd) {
 				m.input.Focus()
 			case "api-action":
 				m.api.focusIndex = 3
+				m.input.Blur()
 				m.api.actionIndex = hit.index
 				return m.activateAPIAction()
 			case "api-result":
 				if hit.index >= 0 && hit.index < len(m.api.result.Items) {
 					m.api.focusIndex = 4
+					m.input.Blur()
 					m.api.selected = hit.index
 					m.updateAPIContent()
 				}
